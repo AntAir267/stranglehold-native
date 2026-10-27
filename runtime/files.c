@@ -150,7 +150,7 @@ static int xbox_data_file(const char *rel, char *out, size_t n)
     static int on = -1;
     static char dir[1100];
     if (on < 0) {
-        on = strcasecmp(option_str("xbox_data", "on"), "off") != 0;
+        on = strcasecmp(option_str("xbox_data", "off"), "off") != 0;   /* (LA Rush's; unused here) */
         snprintf(dir, sizeof dir, "%s/xbox_data", user_dir);
     }
     return on && resolve_ci(dir, rel, out, n);
@@ -249,7 +249,7 @@ void files_init(void)
 #define GENERIC_WRITE 0x40000000u
 
 /* SKIP INTRO (options.txt skip_intro = on; for testing): the start-up logo and legal movies are
-   not found, so the game goes on to its menus at once */
+   not found [guess: the game then moves on; check the time to the title] */
 static int intro_skipped(const char *name)
 {
     static int on = -1;
@@ -257,7 +257,9 @@ static int intro_skipped(const char *name)
     if (!on || !name) return 0;
     const char *b = strrchr(name, '\\');
     b = b ? b + 1 : name;
-    static const char *const intro[] = {"rushlogo.bik", "midway.bik", "pitbull.bik", "gamestar.bik", "bink.bik", "legal.bik"};
+    static const char *const intro[] = {"AMD64.bik", "intro_Logo_Midway_HD.bik", "intro_Logo_TigerHill_HD.bik",
+                                        "intro_Logo_Unreal.bik", "intro_Logo_Shared.bik", "intro_Legal_US.bik",
+                                        "intro_Legal_Euro.bik", "RP_Logo_bink.bik", "ndgames.bik", "intro_c0010_bink.bik"};
     for (size_t i = 0; i < sizeof intro / sizeof *intro; i++)
         if (!strcasecmp(b, intro[i]))
             return 1;

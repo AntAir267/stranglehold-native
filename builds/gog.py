@@ -60,4 +60,8 @@ HOOKS = {
     # the profile's control config pushed by name, always "PCConfig" on PC [verified: the ANSI
     # string 0xdf8404 pushed there, then MwyInputHandler 0x4a3130]: the layout choice (game.c)
     0x6a7240: 'load_profile_config',
+    # Localize (cdecl: &out FString, section, key, package, 0, 0; returns &out) [verified: the calls
+    # at 0x6bdd4f, 0x6d417b]: the few PC-only strings with keyboard keys written in get the Xbox
+    # buttons while a controller is in use (game.c)
+    0x6f85c0: 'localize',
 }

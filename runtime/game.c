@@ -140,7 +140,7 @@ static void ffm_apply(CPU *c)
 /* On PC nothing calls ApplyForceFeedback [verified: the slot never ran in a level, while the
    manager exists: SHOLD_FIND found the class default and one live instance]. So the managers are
    found by a scan of program memory for their vtable, a slice each tick (a full pass about every
-   1.5 s), and every one found is stepped each tick from the engine loop; the strongest drives the
+   1.5 s until one is found, then every 6 s), and every one found is stepped each tick from the engine loop; the strongest drives the
    motors (the class default never has a waveform). */
 #define FFM_MAX 8
 static uint32_t ffm_found[FFM_MAX], ffm_next[FFM_MAX];
@@ -149,7 +149,9 @@ static uint32_t scan_at;
 
 static void ffm_scan_slice(void)
 {
-    uint32_t budget = 16u << 20;            /* bytes a tick */
+    /* bytes a tick: 16 MB while no manager is known, 4 MB (a pass about every 6 s, catching a
+       new one after a level change) once one is */
+    uint32_t budget = ffm_nfound ? 4u << 20 : 16u << 20;
     while (budget) {
         if (scan_region >= mem_region_count()) {
             memcpy(ffm_found, ffm_next, sizeof ffm_found);
@@ -217,10 +219,82 @@ static int hook_load_profile_config_fn(CPU *c)
     return 1;
 }
 
+/* ------------------------------------------------------------------ PC-only key texts
+   A few PC strings have the keys written in, keys the 360 never had because its menus drew
+   button images there [verified: strings.eng on both]: Press_Start "Press ENTER" (the title),
+   Press_Start_Button, Press_A_button_To_Begin_Match and tips_PressAContinue ("Press SPACEBAR to
+   Continue"). While a controller is in use the localized text has the PC Start key's name
+   (display table entry 0) replaced by the Xbox Start glyph and the PC L2 name (entry 9,
+   "SPACEBAR" in English, which these strings use for A) by the A glyph (entry 16), from the
+   same display tables as the prompts, so every language works; the title's two strings take the
+   word START instead, its font having no glyphs [verified: shot, "Press a"]. The texts are shorter, so the
+   engine's own string is edited in place (it frees it with its own allocator). */
+static uint32_t disp_pc, disp_xbox;     /* (the display tables: defined with the prompts below) */
+static uint32_t guest_wstr(const char *s);
+
+static int wstr_eq(uint32_t w, const char *s)
+{
+    if (!w) return 0;
+    for (;; w += 2, s++) {
+        uint32_t ch = R16(w);
+        if (ch != (uint8_t)*s) return 0;
+        if (!ch) return 1;
+    }
+}
+
+/* in the FString at fs, every occurrence of the text of from (an FString) replaced by to's */
+static void fstr_replace(uint32_t fs, uint32_t from, uint32_t to)
+{
+    uint32_t d = R32(fs), fd = R32(from), td = R32(to);
+    int32_t n = (int32_t)R32(fs + 4) - 1, fn = (int32_t)R32(from + 4) - 1, tn = (int32_t)R32(to + 4) - 1;
+    if (!d || !fd || !td || n <= 0 || fn <= 0 || tn < 0 || tn > fn) return;
+    int32_t o = 0;
+    for (int32_t i = 0; i < n; ) {
+        int match = i + fn <= n;
+        for (int32_t k = 0; match && k < fn; k++)
+            if (R16(d + 2 * (uint32_t)(i + k)) != R16(fd + 2 * (uint32_t)k)) match = 0;
+        if (match) {
+            for (int32_t k = 0; k < tn; k++) W16(d + 2 * (uint32_t)o++, R16(td + 2 * (uint32_t)k));
+            i += fn;
+        } else
+            W16(d + 2 * (uint32_t)o++, R16(d + 2 * (uint32_t)i++));
+    }
+    W16(d + 2 * (uint32_t)o, 0);
+    W32(fs + 4, (uint32_t)o + 1);
+}
+
+static int hook_localize_fn(CPU *c)
+{
+    if (!disp_xbox || !input_controller_last())
+        return 0;
+    uint32_t out = R32(c->esp + 4), key = R32(c->esp + 12);
+    if (!wstr_eq(key, "Press_Start") && !wstr_eq(key, "Press_Start_Button") &&
+        !wstr_eq(key, "Press_A_button_To_Begin_Match") && !wstr_eq(key, "tips_PressAContinue"))
+        return 0;
+    int title = wstr_eq(key, "Press_Start") || wstr_eq(key, "Press_Start_Button");
+    F_006f85c0_orig(c);                     /* (returns to our caller's state: ret popped) */
+    if (title) {
+        /* the title's font has no button glyphs (it drew "a"): the word START, as consoles label it */
+        static uint32_t start_fs;
+        if (!start_fs) {
+            start_fs = galloc(12);
+            W32(start_fs, guest_wstr("START"));
+            W32(start_fs + 4, 6);
+            W32(start_fs + 8, 6);
+        }
+        fstr_replace(out, disp_pc + 12 * 0, start_fs);
+    } else {
+        fstr_replace(out, disp_pc + 12 * 0, disp_xbox + 12 * 0);
+        fstr_replace(out, disp_pc + 12 * 9, disp_xbox + 12 * 16);
+    }
+    return 1;
+}
+
 static int hook_button_name_fn(CPU *c);
 
 void game_init(void)
 {
+    hook_localize = hook_localize_fn;
     hook_load_profile_config = hook_load_profile_config_fn;
     if (R32(FFM_APPLY_SLOT) == 0x4024a0u)        /* (the empty ret 8) */
         W32(FFM_APPLY_SLOT, thunk_addr(ffm_apply, "UXnaForceFeedbackManager::ApplyForceFeedback (runtime)"));

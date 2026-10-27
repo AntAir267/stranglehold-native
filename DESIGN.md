@@ -264,3 +264,14 @@ Findings (2026-10-26):
   1.5 s), steps every one found each tick (rumble_tick) and drives the motors from the strongest.
   The manager's FFWaveform field is at +0x3c [verified: found on the first shot]. Improvement for
   later: reach the manager through the local player instead of the scan.
+- Dead ends noted: StrangleholdSeqCond_Platform (a PC-only Kismet condition with Xbox360/PS3/PC
+  outputs) is used by no map or menu package [verified: work/find_cls.py over all CookedPC
+  packages]; WorldInfo.IsConsoleBuild exists but nothing found choosing the control screen by it.
+  The Settings > Control Config screen choice lives in the WooScreenSet data (ui_shell /
+  ui_common: "causeevent settingsContr", Pc_Keyboard_Config, 360_ControlConfig).
+- 2026-10-26: PC-only key texts done [verified: shots]: hook on Localize (0x6f85c0) - with a pad,
+  the title reads "Press START" (its font has no glyphs: the word), the tutorial "Press [A] to
+  Continue" (glyph). Rumble scan slowed to 4 MB a tick once a manager is known. Options help
+  trimmed to this port's (display, rumble, controller_layout, frame_limit); xbox_data (LA Rush's)
+  off. skip_intro (tests) now skips Stranglehold's logo/legal movies and the opening cinematic
+  (intro_c0010): the title in ~60 s instead of ~190 s (work/testmenu has it on).
