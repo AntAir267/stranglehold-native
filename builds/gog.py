@@ -37,5 +37,27 @@ JUMP_TABLES = {}
 NONLOCAL_JUMPS = []
 NORETURN_IMPORTS = ['ExitProcess', 'ExitThread', 'TerminateProcess', 'FatalExit', 'FatalAppExitA']
 
+# Calls through a pointer whose callee changes the x87 stack (the translator assumes they don't and
+# checks at run time): call-site address -> effect, or None when it depends on the callee (the
+# function then keeps the x87 stack in the CPU record, right for any depth)
+ICALL_FPU = {
+    # a forwarder (0x40be60: this->vtable[+0x10c](float, int), then ret 8; itself a virtual method
+    # shared by 17 vtables, identical code folded) whose callee returns a float in some classes and
+    # nothing in others [verified: fpu_depth_fail at 0x40be75 with top 1, and with top 0 once
+    # declared +1, in the market level with a pad]
+    0x40be75: None,
+}
+
 MEM_OVERRIDES = {}
-HOOKS = {}
+# Functions the runtime may hook (hook_<name>, run at the function's entry; returns 1 if it did the
+# call itself). Hooks with no handler set cost nothing.
+HOOKS = {
+    # (this = the engine info; &out FString, action index, layout column): out = the
+    # ControllerSettings key of the button bound to an action, ButtonMappings[ControllerLayouts[
+    # [[this+0x294] + idx*28 + 0x18] + [this+0x1bc] + column]] (ret 0xc) [verified: disassembly]:
+    # the Xbox names while a controller is in use (game.c)
+    0x6d1000: 'button_name',
+    # the profile's control config pushed by name, always "PCConfig" on PC [verified: the ANSI
+    # string 0xdf8404 pushed there, then MwyInputHandler 0x4a3130]: the layout choice (game.c)
+    0x6a7240: 'load_profile_config',
+}

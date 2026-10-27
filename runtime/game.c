@@ -1,7 +1,12 @@
 /* Stranglehold's own hooks and per-frame work. Empty to start: filled as the port needs it. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "runtime.h"
+#include "options.h"
+#include "input.h"
+#include "funcs.h"
 #include "pad.h"
 
 /* ------------------------------------------------------------------ PC or console behaviour
@@ -20,8 +25,208 @@ static void engine_is_pc(CPU *c)
     api_return(c, c->eax, 0);
 }
 
+
+/* ------------------------------------------------------------------ rumble
+   On the 360 the PlayerController makes XeDrv.XnaForceFeedbackManager, whose native
+   ApplyForceFeedback(ControllerId, DeltaTime) plays the waveform scripts start
+   (ClientPlayForceFeedbackWaveform). The PC config has that line commented out, and its
+   UXnaForceFeedbackManager (vtable 0xe5e4d4) keeps UForceFeedbackManager's empty
+   ApplyForceFeedback, slot 55 (+0xdc: ret 8) [verified: the vtables; UObject has 54 slots]. The
+   user's config turns the manager on (tools/upkpatch.py) and this slot gets ffm_apply, which does
+   what the console's did, UE3's waveform rules: samples of (left amplitude, right amplitude, left
+   function, right function: bytes; duration: float), played in turn, each shaped over its time
+   (constant, linear up or down, quarter or half sine, noise), times ScaleAllWaveformsBy, looping if
+   asked; the manager's CurrentSample, ElapsedTime and FFWaveform are kept up to date for the
+   scripts. Left is the heavy (low) motor. Field places are found from the first waveform played:
+   the manager's FFWaveform is the pointer to a UForceFeedbackWaveform (vtable 0xe1db6c), after the
+   bools (bAllowsForceFeedback bit 0, bIsPaused bit 1 [guess: UE3's order]) and followed by
+   CurrentSample, ElapsedTime, ScaleAllWaveformsBy (1.0 by default, checked); the waveform's own
+   fields start at the same object size: bIsLooping, then Samples (data, count, max) [guess: UE3's
+   ForceFeedbackManager.uc / ForceFeedbackWaveform.uc layout, checked against the data when found]. */
+#define XNA_FFM_VTABLE    0xe5e4d4u
+#define FFM_APPLY_SLOT    (XNA_FFM_VTABLE + 55u * 4u)
+#define FFWAVE_VTABLE     0xe1db6cu
+static int ffm_wave_off = -1;           /* the manager's FFWaveform field, once found */
+
+static int guest_ok(uint32_t a) { return a >= ARENA_START && a < ARENA_END; }
+
+static double wave_shape(int fn, double pct)
+{
+    switch (fn) {
+    case 0: return 1;                                   /* WF_Constant */
+    case 1: return pct;                                 /* WF_LinearIncreasing */
+    case 2: return 1 - pct;                             /* WF_LinearDecreasing */
+    case 3: return sin(pct * M_PI / 2);                 /* WF_Sin0to90 */
+    case 4: return sin(M_PI / 2 + pct * M_PI / 2);      /* WF_Sin90to180 */
+    case 5: return sin(pct * M_PI);                     /* WF_Sin0to180 */
+    case 6: return (double)rand() / RAND_MAX;           /* WF_Noise */
+    }
+    return 1;
+}
+
+static void motors(uint16_t low, uint16_t high)
+{
+    static uint16_t was_low, was_high;
+    if (!low && !high && !was_low && !was_high)
+        return;
+    if ((low != 0) != (was_low != 0) || (high != 0) != (was_high != 0))
+        LOG(LOG_INPUT, "rumble: motors %u %u", low, high);
+    for (int s = 0; s < PAD_SLOTS; s++)
+        input_joy_rumble(s, low, high, low || high ? 200 : 0);
+    was_low = low;
+    was_high = high;
+}
+
+/* one manager's waveform advanced by dt; its motor levels (0-255) into *l, *r */
+static void ffm_step(uint32_t self, float dt, double *l, double *r)
+{
+    *l = *r = 0;
+    if (ffm_wave_off < 0) {
+        for (int off = 0x20; off <= 0x80; off += 4) {
+            uint32_t w = R32(self + off);
+            if (guest_ok(w) && R32(w) == FFWAVE_VTABLE && R32(self + off + 12) == 0x3f800000u) {
+                ffm_wave_off = off;
+                LOG(LOG_ALWAYS, "rumble: the manager's waveform field at +%#x", off);
+                break;
+            }
+        }
+        if (ffm_wave_off < 0) return;
+    }
+    uint32_t bools = R32(self + ffm_wave_off - 4), wave = R32(self + ffm_wave_off);
+    if (!wave || !guest_ok(wave) || R32(wave) != FFWAVE_VTABLE || !(bools & 1) || (bools & 2))
+        return;
+    uint32_t fields = (uint32_t)ffm_wave_off - 4;        /* (the object size: both classes' first field) */
+    int loop = R32(wave + fields) & 1;
+    uint32_t data = R32(wave + fields + 4);
+    int32_t n = (int32_t)R32(wave + fields + 8);
+    int32_t cur = (int32_t)R32(self + ffm_wave_off + 4);
+    float elapsed = RF32(self + ffm_wave_off + 8) + dt, scale = RF32(self + ffm_wave_off + 12);
+    if (n <= 0 || n > 256 || !guest_ok(data)) return;
+    while (cur < n && elapsed > RF32(data + 8 * cur + 4)) {
+        elapsed -= RF32(data + 8 * cur + 4);
+        cur++;
+    }
+    if (cur >= n) {
+        if (loop) cur = 0;
+        else {
+            W32(self + ffm_wave_off, 0);                /* (done: FFWaveform = None) */
+            W32(self + ffm_wave_off + 4, 0);
+            WF32(self + ffm_wave_off + 8, 0);
+            return;
+        }
+    }
+    W32(self + ffm_wave_off + 4, (uint32_t)cur);
+    WF32(self + ffm_wave_off + 8, elapsed);
+    uint32_t smp = data + 8 * (uint32_t)cur;
+    float dur = RF32(smp + 4);
+    double pct = dur > 0 ? elapsed / dur : 0;
+    if (pct > 1) pct = 1;
+    double lv = R8(smp) * wave_shape(R8(smp + 2), pct) * scale, rv = R8(smp + 1) * wave_shape(R8(smp + 3), pct) * scale;
+    *l = lv < 0 ? 0 : lv > 255 ? 255 : lv;
+    *r = rv < 0 ? 0 : rv > 255 ? 255 : rv;
+}
+
+/* if the engine ever calls ApplyForceFeedback (the console's path), it plays the same way */
+static void ffm_apply(CPU *c)
+{
+    uint32_t self = c->ecx;
+    float dt = RF32(c->esp + 8);
+    api_return(c, 0, 2);
+    double l, r;
+    ffm_step(self, dt, &l, &r);
+    motors((uint16_t)(l * 257), (uint16_t)(r * 257));
+}
+
+/* On PC nothing calls ApplyForceFeedback [verified: the slot never ran in a level, while the
+   manager exists: SHOLD_FIND found the class default and one live instance]. So the managers are
+   found by a scan of program memory for their vtable, a slice each tick (a full pass about every
+   1.5 s), and every one found is stepped each tick from the engine loop; the strongest drives the
+   motors (the class default never has a waveform). */
+#define FFM_MAX 8
+static uint32_t ffm_found[FFM_MAX], ffm_next[FFM_MAX];
+static int ffm_nfound, ffm_nnext, scan_region;
+static uint32_t scan_at;
+
+static void ffm_scan_slice(void)
+{
+    uint32_t budget = 16u << 20;            /* bytes a tick */
+    while (budget) {
+        if (scan_region >= mem_region_count()) {
+            memcpy(ffm_found, ffm_next, sizeof ffm_found);
+            ffm_nfound = ffm_nnext;
+            ffm_nnext = 0;
+            scan_region = 0;
+            scan_at = 0;
+            return;
+        }
+        uint32_t b, n;
+        mem_region(scan_region, &b, &n);
+        if (scan_at < b) scan_at = b;
+        uint32_t end = b + n, stop = scan_at + budget < end ? scan_at + budget : end;
+        for (uint32_t a = scan_at; a + 4 <= stop; a += 4)
+            if (R32(a) == XNA_FFM_VTABLE && ffm_nnext < FFM_MAX)
+                ffm_next[ffm_nnext++] = a;
+        budget -= stop - scan_at;
+        scan_at = stop;
+        if (stop >= end) { scan_region++; scan_at = 0; }
+    }
+}
+
+static void rumble_tick(float dt)
+{
+    ffm_scan_slice();
+    double l = 0, r = 0;
+    for (int i = 0; i < ffm_nfound; i++) {
+        if (R32(ffm_found[i]) != XNA_FFM_VTABLE) continue;
+        double a, b;
+        ffm_step(ffm_found[i], dt, &a, &b);
+        if (a > l) l = a;
+        if (b > r) r = b;
+    }
+    motors((uint16_t)(l * 257), (uint16_t)(r * 257));
+}
+
+static uint32_t guest_wstr(const char *s);
+
+/* ------------------------------------------------------------------ controller layout
+   The 360 lets the player pick one of four controller configurations (profile setting 108); they
+   differ only in the action set (XBoxActions, XBoxActionsAlt1-3) [verified: work/ctrl_pc]. The PC
+   always pushes PCConfig when the profile loads (0x6a7240, cdecl, the MwyInputHandler as its one
+   argument: FString "PCConfig" to the handler's load-by-name 0x4a3130) [verified: disassembly].
+   tools/upkpatch.py makes XBoxConfigAlt1-3_99 complete PC configs with that layout's actions
+   (PCConfig itself has the standard one); hook_load_profile_config pushes the chosen one instead.
+   The choice is option controller_layout for now: the PC's Control Config opens its keyboard
+   screen, not the 360's layout screen (the menus are one WooScreenSet blob) [verified: shot]. */
+static int hook_load_profile_config_fn(CPU *c)
+{
+    int layout = atoi(option_str("controller_layout", "1"));
+    if (layout < 2 || layout > 4)
+        return 0;                           /* (PCConfig: the standard layout) */
+    char name[32];
+    snprintf(name, sizeof name, "XBoxConfigAlt%d_99", layout - 1);
+    uint32_t n = (uint32_t)strlen(name) + 1, fs = galloc(12);
+    W32(fs, guest_wstr(name));
+    W32(fs + 4, n);
+    W32(fs + 8, n);
+    uint32_t handler = R32(c->esp + 4), ret = R32(c->esp);
+    LOG(LOG_ALWAYS, "controller layout %d: %s", layout, name);
+    c->ecx = handler;
+    guest_call(c, 0x4a3130u, 1, fs);
+    c->ret = ret;
+    c->esp += 4;                            /* (cdecl: the caller pops the argument) */
+    return 1;
+}
+
+static int hook_button_name_fn(CPU *c);
+
 void game_init(void)
 {
+    hook_load_profile_config = hook_load_profile_config_fn;
+    if (R32(FFM_APPLY_SLOT) == 0x4024a0u)        /* (the empty ret 8) */
+        W32(FFM_APPLY_SLOT, thunk_addr(ffm_apply, "UXnaForceFeedbackManager::ApplyForceFeedback (runtime)"));
+    else
+        LOG(LOG_ALWAYS, "rumble: the force feedback slot is not the expected stub; left alone");
+    hook_button_name = hook_button_name_fn;
     if (R32(ENGINEINFO_PC_SLOT) == 0x567a30u)
         W32(ENGINEINFO_PC_SLOT, thunk_addr(engine_is_pc, "UStrangleholdEngineInfo::IsPC (runtime)"));
     else
@@ -125,6 +330,28 @@ static int pads_merged(uint8_t b[PAD_BUTTONS], int a[PAD_AXES])
     return any;
 }
 
+/* SHOLD_FIND=<vtable hex>@<tick> (tests): objects with that vtable, listed once at that tick */
+static void find_objects(unsigned long tick)
+{
+    static long at = -2;
+    static uint32_t vt;
+    if (at == -2) {
+        const char *e = getenv("SHOLD_FIND");
+        at = -1;
+        if (e && strchr(e, '@')) { vt = (uint32_t)strtoul(e, NULL, 16); at = atol(strchr(e, '@') + 1); }
+    }
+    if (at < 0 || tick != (unsigned long)at) return;
+    int found = 0;
+    for (int i = 0; i < mem_region_count(); i++) {
+        uint32_t b, n;
+        mem_region(i, &b, &n);
+        for (uint32_t a = b; a + 4 <= b + n; a += 4)
+            if (R32(a) == vt && found++ < 20)
+                LOG(LOG_ALWAYS, "find: %08x at %08x", vt, a);
+    }
+    LOG(LOG_ALWAYS, "find: %d objects with vtable %08x at tick %lu", found, vt, tick);
+}
+
 static void pad_tick(CPU *c)
 {
     static uint8_t was[K_COUNT];
@@ -161,6 +388,147 @@ static void pad_tick(CPU *c)
     had_pad = have;
 }
 
+/* ------------------------------------------------------------------ button prompts
+   The prompts' button names come from the engine info object itself ([0x1066700],
+   UStrangleholdEngineInfo, vtable 0xdb85c4, which carries the controller-token fields; 0x6d1000 is
+   called on it [verified: gdb, ecx = the engine info, 18 names]; a separate
+   UWooControllerTokenManager at [engine info +0x2b8] has an empty list): its ButtonMappings
+   (TArray<FString> at +0x288: data, count, max; 12-byte FStrings) name the
+   ControllerSettings localization key of each virtual pad button, which 0x6d1000 copies and the
+   prompt builder localizes [verified: disassembly]. The PC config names PC*ButtonName (keyboard
+   keys); the 360's XBox*ButtonName, which the PC's localization still has as the font's button
+   glyphs [verified: work/loceng_pc/ControllerSettings.eng]. A copy with the XBox names is made once
+   the list is there (prompts_tick); hook_button_name answers from it while a controller is in use. */
+#define ENGINE_INFO        0x1066700u
+#define ENGINEINFO_VTABLE  0xdb85c4u
+static uint32_t tok_mgr, tok_pc_data, tok_xbox_data;
+
+/* the XBox copy of the engine info's ButtonMappings (made once, when the list is first there) */
+static void prompts_copy(uint32_t tm)
+{
+    int32_t n = (int32_t)R32(tm + 0x28c);
+    if (tok_xbox_data || n <= 0 || n > 64)
+        return;
+    tok_mgr = tm;
+    tok_pc_data = R32(tm + 0x288);
+    uint32_t x_data = galloc(12 * (uint32_t)n);
+    for (int i = 0; i < n; i++) {
+        uint32_t f = tok_pc_data + 12 * (uint32_t)i, src = R32(f);
+        int32_t len = (int32_t)R32(f + 4);
+        char name[96] = "";
+        for (int k = 0; k < len - 1 && k < 94; k++) name[k] = (char)R16(src + 2 * k);
+        char x[100];
+        snprintf(x, sizeof x, "%s%s", !strncmp(name, "PC", 2) ? "XBox" : "", !strncmp(name, "PC", 2) ? name + 2 : name);
+        uint32_t m = (uint32_t)strlen(x) + 1, w = galloc(2 * m);
+        for (uint32_t k = 0; k < m; k++) W16(w + 2 * k, (uint8_t)x[k]);
+        W32(x_data + 12 * (uint32_t)i, w);
+        W32(x_data + 12 * (uint32_t)i + 4, m);
+        W32(x_data + 12 * (uint32_t)i + 8, m);
+    }
+    tok_xbox_data = x_data;
+    LOG(LOG_ALWAYS, "prompts: %d button names, XBox copy ready", n);
+}
+
+/* The prompts' display text: at start-up the controller token manager (UWooControllerTokenManager,
+   vtable 0xdbbcdc, at [engine info +0x2b8]) localizes its copy of the names (+0x5c: data, count)
+   into display strings (+0x68: data, count, max) with Localize("Controls", name,
+   "ControllerSettings") (0x6bdc70, from engine init 0x65ba50) [verified: gdb backtrace of the
+   Localize calls for PCStartButtonName...; the tutorial text reads those]. An XBox table is made
+   once the same way (Localize 0x6f85c0, cdecl: &out, section, key, package, 0, 0), and the
+   +0x68 data pointer follows the device in use; the engine's own table is put back before exit. */
+#define TOKENMGR_VTABLE  0xdbbcdcu
+#define LOC_SECTION      0xdfde9cu      /* L"Controls" (the strings 0x6bdc70 passes) */
+#define LOC_PACKAGE      0xdfde74u      /* L"ControllerSettings" */
+static uint32_t disp_mgr, disp_pc, disp_xbox;
+
+static uint32_t guest_wstr(const char *s)
+{
+    uint32_t n = (uint32_t)strlen(s) + 1, w = galloc(2 * n);
+    for (uint32_t k = 0; k < n; k++) W16(w + 2 * k, (uint8_t)s[k]);
+    return w;
+}
+
+static void display_names(CPU *c, uint32_t tm)
+{
+    int32_t n = (int32_t)R32(tm + 0x60);
+    if (n <= 0 || n > 64 || (int32_t)R32(tm + 0x6c) != n || !R32(tm + 0x68))
+        return;                             /* (not localized yet) */
+    disp_mgr = tm;
+    disp_pc = R32(tm + 0x68);
+    uint32_t x = galloc(12 * (uint32_t)n), src = R32(tm + 0x5c);
+    for (int i = 0; i < n; i++) {
+        uint32_t f = src + 12 * (uint32_t)i, sp = R32(f);
+        int32_t len = (int32_t)R32(f + 4);
+        char name[96] = "", key[100];
+        for (int k = 0; k < len - 1 && k < 94; k++) name[k] = (char)R16(sp + 2 * k);
+        snprintf(key, sizeof key, "%s%s", !strncmp(name, "PC", 2) ? "XBox" : "", !strncmp(name, "PC", 2) ? name + 2 : name);
+        uint32_t out = x + 12 * (uint32_t)i;
+        W32(out, 0); W32(out + 4, 0); W32(out + 8, 0);
+        guest_call(c, 0x6f85c0u, 6, out, LOC_SECTION, guest_wstr(key), LOC_PACKAGE, 0u, 0u);
+    }
+    disp_xbox = x;
+    LOG(LOG_ALWAYS, "prompts: %d display names, Xbox table ready", n);
+}
+
+static void prompts_tick(CPU *c)
+{
+    uint32_t ei = R32(ENGINE_INFO);
+    if (!ei || R32(ei) != ENGINEINFO_VTABLE)
+        return;
+    prompts_copy(ei);
+    uint32_t tm = R32(ei + 0x2b8);
+    if (!tm || R32(tm) != TOKENMGR_VTABLE)
+        return;
+    if (!disp_xbox) {
+        display_names(c, tm);
+        if (!disp_xbox) return;
+    }
+    if (tm != disp_mgr) return;
+    uint32_t want = input_controller_last() ? disp_xbox : disp_pc;
+    if (R32(tm + 0x68) != want) {
+        W32(tm + 0x68, want);
+        LOG(LOG_INPUT, "prompts: %s names", want == disp_xbox ? "Xbox" : "PC");
+    }
+}
+
+static void prompts_restore(void)
+{
+    if (disp_mgr && R32(disp_mgr) == TOKENMGR_VTABLE)
+        W32(disp_mgr + 0x68, disp_pc);      /* (the engine frees its own table at exit) */
+}
+
+/* hook at 0x6d1000 (builds/gog.py): while a controller is in use, the key comes from the XBox copy,
+   and the two layout entries the PC moved to its own keys (ControllerLayouts[10] = 17 'F',
+   [14] = 16 'E') take the 360's (1 Back, 0 Start) [verified: work/script_pc vs script_360
+   WooEngineInfo]. Swapping the array pointer instead did not hold: the engine sets the list again
+   while it loads a level and expands the prompts inside that same tick [verified: gdb]. */
+static int hook_button_name_fn(CPU *c)
+{
+    if (!input_controller_last() || R32(c->ecx) != ENGINEINFO_VTABLE)
+        return 0;
+    prompts_copy(c->ecx);
+    if (!tok_xbox_data)
+        return 0;
+    {
+        static int said;
+        if (!said++) LOG(LOG_ALWAYS, "prompts: Xbox button names in use");
+    }
+    uint32_t self = c->ecx, out = R32(c->esp + 4), idx = R32(c->esp + 8), col = R32(c->esp + 12) & 0xff;
+    uint32_t pos = R32(R32(self + 0x294) + idx * 28 + 0x18) + col;
+    uint32_t b = R8(R32(self + 0x1bc) + pos);
+    if (pos == 10) b = 1;
+    else if (pos == 14) b = 0;
+    if ((int32_t)b >= (int32_t)R32(self + 0x28c))
+        return 0;
+    uint32_t ret = R32(c->esp);
+    c->ecx = out;                           /* FString copy (0x401350, thiscall: this, source) */
+    guest_call(c, 0x401350u, 1, tok_xbox_data + 12 * b);
+    c->eax = out;
+    c->ret = ret;
+    c->esp += 4 + 12;                       /* (ret 0xc) */
+    return 1;
+}
+
 static uint32_t engine_call(CPU *c, uint32_t fn)
 {
     c->ecx = ENGINE_LOOP;               /* thiscall */
@@ -182,12 +550,23 @@ API_CDECL(WXMSW262U, _wxEntry__YAHPAUHINSTANCE____0PADH_Z)
                 W32(REQUESTING_EXIT, 1);
             else {
                 pad_tick(c);
+                prompts_tick(c);
+                {
+                    static double last;
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+                    rumble_tick(last ? (float)(now - last) : 0.f);
+                    last = now;
+                }
                 static unsigned long ticks;
                 engine_call(c, 0x4054e0u);
+                find_objects(ticks);
                 if (++ticks % 200 == 0)
                     LOG(LOG_WIN, "engine: %lu ticks, %lu frames", ticks, frame_count);
             }
         }
+        prompts_restore();
         LOG(LOG_ALWAYS, "engine: exit requested");
     }
     return r;

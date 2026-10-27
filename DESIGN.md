@@ -224,3 +224,43 @@ Findings (2026-10-26):
   slot (vtable 0xdb85c4 +0xf0) answers from the device used last (game.c engine_is_pc): with the
   fixed PC answer the camera only took the mouse's absolute orbit. Still PC: the tutorial text's
   prompts ("Press SPACEBAR"), Auto Aim off, no rumble, layout always the default.
+- 2026-10-26: XBOX PROMPTS [verified: shot, the market tutorial reads "Press [LT] to dive and
+  press [RT] to shoot"]. The prompt text comes from the controller token manager
+  (UWooControllerTokenManager, vtable 0xdbbcdc, [engine info +0x2b8]): at engine init 0x6bdc70
+  localizes its names (+0x5c) into display strings (+0x68) with Localize("Controls", name,
+  "ControllerSettings") [verified: gdb backtrace]. game.c makes an XBox table once (the engine's
+  own Localize 0x6f85c0, so every language) and points +0x68 at it while a controller is in use,
+  back to the engine's before exit. The PC localization still has the XBox names as font glyphs.
+  Also hooked (0x6d1000, builds/gog.py HOOKS) for the action-key path: XBox names and the 360's
+  ControllerLayouts[10]/[14]. Tried: swapping the engine info's ButtonMappings (+0x288) - the
+  engine resets it during level load and the display table is built at init anyway.
+  Still PC text: five PC-only strings with keys written in (strings.eng Press_Start "Press ENTER",
+  Press_Start_Button, Press_A_button_To_Begin_Match, tips_PressAContinue "Press SPACEBAR to
+  Continue", Demo\Controller_Layout); the 360 has no such keys (its UI used images). Plan: a hook
+  on Localize (0x6f85c0) giving glyph text for those while a pad is in use (needs a full rebuild).
+- RUMBLE [verified: log, firing pulses the motors at 7710 (30/255) about every 100 ms]: the PC config comments out the force feedback manager
+  ([Engine.PlayerController] ForceFeedbackManagerClassName=WinDrv.XnaForceFeedbackManager; the 360
+  has XeDrv.XnaForceFeedbackManager); tools/upkpatch.py now also writes the user's Coalesced.ini
+  with it on. UXnaForceFeedbackManager (vtable 0xe5e4d4) keeps the base's empty
+  ApplyForceFeedback (slot 55, +0xdc, ret 8) [verified: vtables]; game.c points that slot at
+  ffm_apply, which plays UE3 waveforms (samples: left/right amplitude, left/right function bytes,
+  duration float [verified: the decompiled WooDamageType/WooWeaponPatternFireMode defaults]) on
+  the pads' motors (left = low). Sources: weapons build a firing waveform (BuiltWaveform),
+  WooDamageType's damaged (100/40 noise, 0.5 s) and killed (100/100, 0.75 s) waveforms.
+- LAYOUTS: the 360's four controller configurations differ only in the action set (XBoxActions,
+  XBoxActionsAlt1-3). tools/upkpatch.py makes XBoxConfigAlt1-3_99 complete PC configs with that
+  layout's actions [verified: uedump of the patched package] and lists them in the config;
+  hook_load_profile_config (0x6a7240) pushes the chosen one in place of PCConfig [verified: log,
+  "controller layout 2: XBoxConfigAlt1_99"]. Choice: option controller_layout (1-4) for now - the
+  PC's Settings > Control Config opens the keyboard remapping screen, not the 360's layout screen,
+  even with a pad [verified: shot]; the menus are one WooScreenSet object (Midway's binary screen
+  format, not decoded), whose data still holds 360_ControlConfig.
+- x87: a shared forwarder (0x40be60, a virtual in 17 vtables) calls this->vtable[+0x10c] whose
+  callee returns a float in some classes and nothing in others; builds/gog.py ICALL_FPU (new
+  translator option) declares that call None, so the forwarder keeps the x87 stack in the record.
+  The engine never calls ApplyForceFeedback on PC (the slot never ran while a live manager
+  existed: SHOLD_FIND=e5e4d4@1500 found the class default and one instance), so game.c finds the
+  managers by scanning program memory for their vtable, 16 MB a tick (a full pass about every
+  1.5 s), steps every one found each tick (rumble_tick) and drives the motors from the strongest.
+  The manager's FFWaveform field is at +0x3c [verified: found on the first shot]. Improvement for
+  later: reach the manager through the local player instead of the scan.

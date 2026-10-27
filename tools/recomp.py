@@ -86,6 +86,7 @@ def main():
                    getattr(cfg, 'NONLOCAL_JUMPS', []))
     prog.set_tables(getattr(cfg, 'TABLES', []))
     prog.hooks = dict(getattr(cfg, 'HOOKS', {}))
+    prog.icall_fpu = dict(getattr(cfg, 'ICALL_FPU', {}))
     prog.inline = dict(getattr(cfg, 'INLINE', {}))
     prog.set_consts(getattr(cfg, 'CONSTS', {}))
     prog.mem_overrides = {a: n for n, (a, orig) in getattr(cfg, 'MEM_OVERRIDES', {}).items()}

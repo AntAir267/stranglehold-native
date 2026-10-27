@@ -136,6 +136,7 @@ static const char *const help[][2] = {
     {"antialiasing", "antialiasing: off, 2x, 4x (the default) or 8x (multisampling: the 3D world's edges smoothed; "
                      "the HUD and menus drawn as they were)"},
     {"rumble", "rumble: on or off (controller vibration)"},
+    {"controller_layout", "controller_layout: 1 (the default), 2, 3 or 4 - the Xbox 360 version's controller configurations"},
     {"frame_limit", "frame_limit: off, screen (3 under the screen's refresh, for G-Sync / FreeSync) or a rate"},
     {"frame_rate", "frame_rate: 30 (the game's), 60, 90 or 120 (the game's own simulation runs that many frames a second)"},
     {"resolution", "resolution: original (the game's video modes), desktop or WxH"},

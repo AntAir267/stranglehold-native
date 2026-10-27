@@ -678,7 +678,9 @@ class FuncGen:
                 elif op[0] == 'm' and op[3] is None and op[4] is None and P.iat_name(op[6]):
                     callfx[a] = 0
                 else:
-                    callfx[a] = 0           # through a pointer: assumed, checked at run time
+                    # through a pointer: assumed to leave the stack as it was unless the build says
+                    # (builds/*.py ICALL_FPU), checked at run time either way
+                    callfx[a] = P.icall_fpu.get(a, 0)
                     check.add(a)
             elif m in ('ret', 'retn'):
                 ex.append(('in', None))
@@ -1531,6 +1533,7 @@ class Program:
         self.nonlocal_jumps = set(nonlocal_jumps)
         self.tables = []                    # movable fixed-size tables (builds/*.py TABLES)
         self.hooks = {}                     # function -> name of a runtime hook run at its entry
+        self.icall_fpu = {}                 # call-through-pointer address -> x87 stack effect (builds/*.py ICALL_FPU)
         self.inline = {}                    # function -> kind, for runtime helpers done in place
         self.limits = {}                    # insn address -> table whose capacity it checks
         self.consts = {}                    # insn address -> {literal: name} (builds/*.py CONSTS)
