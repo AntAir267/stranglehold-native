@@ -50,6 +50,15 @@ fade-out, factor at range), MwyInput dead-zone ops, Get/SetControllerVibration a
 m_pcKeyboardConfig). Plan [guess until read in the code]: SDL3 gamepads feed XboxTypeS_* keys and
 axes into the engine where the Windows client sends keyboard/mouse input, the console controller
 configs and Xbox prompts are chosen while a pad is in use, and rumble goes to SDL.
+Input path found so far [verified: disassembly]: the input keys are FName globals built at
+start-up from their wide names (0x7a11c0 and on: MouseX at 0x10ae0f0, MouseY 0x10ae0f8,
+XboxTypeS_A at 0x10ae528; each FName is 8 bytes). The viewport's input step (0x8f4a60, called
+from 0x6ef336; esi = the viewport, [esi+0x38] its ViewportClient, esi+4 the FViewport passed
+on) sends mouse motion as ViewportClient vtable +0x28 (InputAxis: viewport, controller id -1,
+key FName (2 dwords), delta, delta time) [guess: names from UE3 of the time]; +0x24 is likely
+InputKey. Nothing in the exe reads the XboxTypeS FNames by address, so a pad's keys would be
+sent the same way from the runtime. Open: which controller id the local player's PlayerInput
+answers to (mouse uses -1).
 The Xbox 360 version (Ant's copy, if he dumps it) is the reference to check parity against:
 its Coalesced ini and MwyInput packages, and its executable through REA for any console-only
 code the PC build left out.
@@ -59,5 +68,29 @@ Direct3D 9 through DXVK 3.1.1 native (SDL3 window system), as larush-native: the
 objects are ours, calling DXVK's by vtable index. third_party/dxvk-native and third_party/sdl3
 were copied from larush-native's builds.
 
+### 6. The engine's main loop (runtime/game.c)
+The shipped game drops its command-line switches before WinMain checks -nowxwindows (ParseParam
+sees an empty appCmdLine [verified: gdb on the translated ParseParam 0x6f3000]), so it always
+starts wxWidgets. The runtime's wxEntry instead runs the -nowxwindows branch: GEngineLoop
+(0x10619a4) Init 0x407e70, Tick 0x4054e0 until GIsRequestingExit 0x107147c [verified:
+disassembly of 0x401ae2-0x401b93]. SetUnrealCallbacks is a no-op. Imported wx variables
+(wxDefaultSize, wxAppConsole::ms_appInitFn) get blocks of program memory (main.c).
+
 ## Progress
-- 2026-10-26: project set up; game unpacked; builds/gog.py; first translator run.
+- 2026-10-26: project set up; game unpacked; builds/gog.py; first translator run (74,050
+  functions, ~100 s discovery, ~6 GB RAM, ~9-10 min to write 9.2 M lines in 301 files; a full
+  build at JOBS=6 ~25 min, 700 MB binary with debug info).
+- Translator: rdtsc (the runtime clock at QueryPerformanceCounter's 10 MHz); "repz ret" and
+  other prefixed control transfers decode as the plain instruction (MSVC 2005's
+  __security_check_cookie was taken for a no-return function); recomp.py writes only files whose
+  contents change (gen/.stamp marks the run), so a change rebuilds only the files it touches -
+  but a new or removed function changes funcs.h and rebuilds everything.
+- Runtime: memory pool 0x01300000-0x74000000 (above the 0x400000-0x12c2000 image, below the
+  stand-in system DLLs); ~185 missing imports added (Unicode W versions, Winsock that finds no
+  network, OLEAUT32 BSTRs, console, affinity, dbghelp/avifil32/msacm32 failing cleanly);
+  RaiseException 0x406d1388 (thread names) continues; DirectInput8 W interfaces accepted;
+  engine message boxes (DialogBoxIndirectParamW) logged with their text.
+- First runs: all DLLs start, the engine reads Coalesced.ini and the localization, lists the
+  980 packages, creates the DirectInput mouse and the D3D9 device on DXVK. Harmless: "Failed to
+  bind to port 9989 for listening for propagation messages" (no network). Stopped at 0xb89650
+  (a function discovery missed: builds/gog.py EXTRA_ENTRIES says why).

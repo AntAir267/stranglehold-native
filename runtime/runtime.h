@@ -79,7 +79,7 @@ const char *thunk_name(uint32_t addr);
 
 /* ------------------------------------------------------------------ memory */
 #define ARENA_START 0x01300000u   /* above Retail-Stranglehold.exe (0x400000-0x12c2000) */
-#define ARENA_END   0x78000000u   /* below MSVCR80 (0x78130000) */
+#define ARENA_END   0x74000000u   /* below the stand-in system DLLs (sysdlls[], kernel32.c: 0x75000000 up) */
 #define THUNK_BASE  0x7f000000u
 #define THUNK_MAX   0x10000u
 void mem_init(void);

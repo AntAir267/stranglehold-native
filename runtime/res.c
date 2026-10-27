@@ -11,12 +11,16 @@ static uint32_t rsrc_of(uint32_t base)
     return rva ? base + rva : 0;
 }
 
+/* the wanted names are UTF-16 (FindResourceW) while this is set */
+static __thread int want_wide;
+
 /* does directory entry `name` match the wanted id or string ("#123" counts as id 123)? */
 static int name_matches(uint32_t root, uint32_t name, uint32_t want)
 {
     if (want < 0x10000)
         return !(name & 0x80000000u) && name == want;
-    const char *w = gptr(want);
+    char wb[256];
+    const char *w = want_wide ? gwstr(want, wb, sizeof wb) : gptr(want);
     if (w[0] == '#')
         return !(name & 0x80000000u) && name == (uint32_t)atoi(w + 1);
     if (!(name & 0x80000000u))
@@ -74,12 +78,21 @@ static uint32_t find_res(uint32_t mod, uint32_t name, uint32_t type, int lang)
 {
     mod = res_module(mod);
     uint32_t r = module_at(mod) ? resource_entry(mod, type, name, lang) : 0;
-    LOG(LOG_API, "FindResource(%x, %s%x, type %x) -> %x", mod, name >= 0x10000 ? gptr(name) : "#", name < 0x10000 ? name : 0, type, r);
+    char nb[256];
+    LOG(LOG_API, "FindResource(%x, %s%x, type %x) -> %x", mod,
+        name < 0x10000 ? "#" : want_wide ? gwstr(name, nb, sizeof nb) : gptr(name), name < 0x10000 ? name : 0, type, r);
     if (!r) set_last_error(1814);       /* ERROR_RESOURCE_NAME_NOT_FOUND */
     return r;
 }
 
 API(KERNEL32, FindResourceA, 3) { return find_res(ARG(0), ARG(1), ARG(2), -1); }
+API(KERNEL32, FindResourceW, 3)
+{
+    want_wide = 1;
+    uint32_t r = find_res(ARG(0), ARG(1), ARG(2), -1);
+    want_wide = 0;
+    return r;
+}
 API(KERNEL32, FindResourceExA, 4) { return find_res(ARG(0), ARG(2), ARG(1), (int)(ARG(3) & 0xffff)); }
 
 API(KERNEL32, LoadResource, 2)
@@ -100,6 +113,33 @@ API(KERNEL32, EnumResourceLanguagesA, 5)
     if (!de) return 0;
     guest_call(c, ARG(3), 5, mod, ARG(1), ARG(2), 0x409u, ARG(4));
     return 1;
+}
+
+/* LoadStringW: string tables (RT_STRING) hold 16 strings per block, block id/16 + 1, each a
+   length and its UTF-16 characters. cap 0 hands out a pointer to the resource's own text. */
+API(USER32, LoadStringW, 4)
+{
+    uint32_t mod = res_module(ARG(0)), id = ARG(1) & 0xffff, buf = ARG(2), cap = ARG(3);
+    uint32_t de = module_at(mod) ? resource_entry(mod, 6, (id >> 4) + 1, -1) : 0;
+    uint32_t len = 0, s = 0;
+    if (de) {
+        s = mod + R32(de);
+        for (uint32_t i = 0; i < (id & 15); i++)
+            s += 2 + 2 * R16(s);
+        len = R16(s);
+        s += 2;
+    }
+    LOG(LOG_API, "LoadStringW(%x, %u) -> %u chars", mod, id, len);
+    if (!len) {
+        if (cap) W16(buf, 0);
+        set_last_error(1814);
+        return 0;
+    }
+    if (!cap) { W32(buf, s); return len; }
+    uint32_t n = len < cap - 1 ? len : cap - 1;
+    memcpy(gptr(buf), gptr(s), 2 * n);
+    W16(buf + 2 * n, 0);
+    return n;
 }
 
 /* ------------------------------------------------------------------ VERSION.dll

@@ -7,7 +7,7 @@ functions: they read the program's 32-bit stdcall arguments, convert what differ
 program's 32-bit and the host's 64-bit layouts (interface pointers, window handles, shared
 handles), call DXVK's object through its vtable by index, and wrap returned interfaces. Methods
 needing more (locks, present parameters, QueryInterface, Release, ...) are written by hand in
-runtime/d3d9.c (render targets: runtime/d3d9_msaa.c, d3d9_reflect.c) and named in SPECIAL; the generated table points at those.
+runtime/d3d9.c and named in SPECIAL; the generated table points at those.
 """
 import re
 import sys
@@ -27,13 +27,6 @@ SPECIAL = {
     'IDirect3DDevice9::Reset', 'IDirect3DDevice9::CreateAdditionalSwapChain',
     'IDirect3DDevice9::GetCreationParameters', 'IDirect3DDevice9::Present',
     'IDirect3DDevice9::GetNPatchMode',
-    'IDirect3DDevice9::SetStreamSource', 'IDirect3DDevice9::SetVertexShaderConstantF',
-    'IDirect3DDevice9::DrawPrimitive', 'IDirect3DDevice9::SetRenderState',
-    'IDirect3DDevice9::SetRenderTarget', 'IDirect3DDevice9::GetRenderTarget',
-    'IDirect3DDevice9::SetDepthStencilSurface', 'IDirect3DDevice9::GetDepthStencilSurface',
-    'IDirect3DDevice9::SetTexture', 'IDirect3DDevice9::Clear',
-    'IDirect3DDevice9::CreateCubeTexture', 'IDirect3DDevice9::CreateDepthStencilSurface',
-    'IDirect3DDevice9::CreateVertexShader', 'IDirect3DDevice9::CreatePixelShader',
     'IDirect3DSwapChain9::Present', 'IDirect3DSwapChain9::GetPresentParameters',
     'IDirect3DVertexBuffer9::Lock', 'IDirect3DVertexBuffer9::Unlock',
     'IDirect3DIndexBuffer9::Lock', 'IDirect3DIndexBuffer9::Unlock',

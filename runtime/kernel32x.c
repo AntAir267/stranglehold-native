@@ -35,23 +35,28 @@ uint32_t gwput(uint32_t dst, const char *s, uint32_t cap)
 }
 
 /* ------------------------------------------------------------------ version */
-/* Windows XP SP3, what the game was made for */
-API(KERNEL32, GetVersionExA, 1)
+/* Windows XP SP3, what the game was made for. OSVERSIONINFO(EX)A is 148/156 bytes, the W
+   form 276/284 (szCSDVersion in UTF-16). */
+static int get_version(uint32_t v, int wide)
 {
-    uint32_t v = ARG(0), size = R32(v);
-    if (size != 148 && size != 156) { set_last_error(122); return 0; }
+    uint32_t size = R32(v), base = wide ? 276 : 148;
+    if (size != base && size != base + 8) { set_last_error(122); return 0; }
     memset(gptr(v + 4), 0, size - 4);
     W32(v + 4, 5);
     W32(v + 8, 1);
     W32(v + 12, 2600);
     W32(v + 16, 2);                     /* VER_PLATFORM_WIN32_NT */
-    gstrncpy(v + 20, "Service Pack 3", 128);
-    if (size == 156) {
-        W16(v + 148, 3);                /* wServicePackMajor */
-        W8(v + 154, 1);                 /* VER_NT_WORKSTATION */
+    if (wide) gwput(v + 20, "Service Pack 3", 128);
+    else gstrncpy(v + 20, "Service Pack 3", 128);
+    if (size == base + 8) {
+        W16(v + base, 3);               /* wServicePackMajor */
+        W8(v + base + 6, 1);            /* VER_NT_WORKSTATION */
     }
     return 1;
 }
+
+API(KERNEL32, GetVersionExA, 1) { return get_version(ARG(0), 0); }
+API(KERNEL32, GetVersionExW, 1) { return get_version(ARG(0), 1); }
 
 API(KERNEL32, IsProcessorFeaturePresent, 1)
 {
@@ -61,6 +66,14 @@ API(KERNEL32, IsProcessorFeaturePresent, 1)
     }
 }
 
+/* the program sees 1-4 processors (the host's, at most 4) */
+static uint32_t cpu_count(void)
+{
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n < 1 ? 1 : n > 4 ? 4 : (uint32_t)n;
+}
+static uint32_t cpu_mask(void) { return (1u << cpu_count()) - 1; }
+
 API(KERNEL32, GetSystemInfo, 1)
 {
     uint32_t b = ARG(0);
@@ -69,15 +82,33 @@ API(KERNEL32, GetSystemInfo, 1)
     W32(b + 4, 4096);
     W32(b + 8, 0x10000);
     W32(b + 12, 0x7ffeffffu);
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    n = n < 1 ? 1 : n > 4 ? 4 : n;
-    W32(b + 16, (1u << n) - 1);
+    uint32_t n = cpu_count();
+    W32(b + 16, cpu_mask());
     W32(b + 20, (uint32_t)n);
     W32(b + 24, 586);
     W32(b + 28, 0x10000);
     W16(b + 32, 6);
     W16(b + 34, 0x0806);
     return 0;
+}
+
+/* affinity: every processor, and setting it changes nothing (the host schedules threads) */
+API(KERNEL32, GetProcessAffinityMask, 3)
+{
+    if (ARG(1)) W32(ARG(1), cpu_mask());
+    if (ARG(2)) W32(ARG(2), cpu_mask());
+    return 1;
+}
+API(KERNEL32, SetProcessAffinityMask, 2) { return (ARG(1) & cpu_mask()) != 0; }
+API(KERNEL32, SetThreadAffinityMask, 2)
+{
+    if (!(ARG(1) & cpu_mask())) { set_last_error(87); return 0; }
+    return cpu_mask();                  /* the previous mask */
+}
+API(KERNEL32, SetThreadIdealProcessor, 2)
+{
+    if (ARG(1) > 32) { set_last_error(87); return 0xffffffffu; }    /* (32: MAXIMUM_PROCESSORS, a query) */
+    return 0;                           /* the previous ideal processor */
 }
 
 API(KERNEL32, GlobalMemoryStatus, 1)
@@ -302,19 +333,26 @@ API(KERNEL32, GetCommandLineW, 0)
     return w;
 }
 
-API(KERNEL32, FormatMessageA, 7)
+static uint32_t format_message(CPU *c, int wide)
 {
     uint32_t flags = ARG(0), id = ARG(2), buf = ARG(4), n = ARG(5);
     char text[128];
     snprintf(text, sizeof text, "Error %u.\r\n", id);
+    uint32_t len = strlen(text), cs = wide ? 2 : 1;
     if (flags & 0x100) {                /* FORMAT_MESSAGE_ALLOCATE_BUFFER */
-        uint32_t p = heap_alloc(process_heap, strlen(text) + 1, 0);
-        gstrncpy(p, text, strlen(text) + 1);
+        uint32_t p = heap_alloc(process_heap, cs * (len + 1), 0);
+        if (wide) gwput(p, text, len + 1);
+        else gstrncpy(p, text, len + 1);
         W32(buf, p);
-    } else
+    } else if (wide)
+        gwput(buf, text, n);
+    else
         gstrncpy(buf, text, n);
-    return strlen(text);
+    return len;
 }
+
+API(KERNEL32, FormatMessageA, 7) { return format_message(c, 0); }
+API(KERNEL32, FormatMessageW, 7) { return format_message(c, 1); }
 
 /* ------------------------------------------------------------------ atoms */
 static char *atoms[0x1000];
@@ -362,6 +400,7 @@ API(KERNEL32, GlobalGetAtomNameA, 3)
 
 /* ------------------------------------------------------------------ locale (US English) */
 API(KERNEL32, GetUserDefaultLCID, 0) { return 0x409; }
+API(KERNEL32, GetUserGeoID, 1) { return 244; }        /* United States */
 API(KERNEL32, GetThreadLocale, 0) { return 0x409; }
 API(KERNEL32, ConvertDefaultLocale, 1) { return 0x409; }
 API(KERNEL32, IsValidLocale, 2) { return 1; }
@@ -596,6 +635,30 @@ API(KERNEL32, lstrcmpW, 2) { return (uint32_t)wcmp(ARG(0), ARG(1), 0); }
 API(KERNEL32, lstrcmpiW, 2) { return (uint32_t)wcmp(ARG(0), ARG(1), 1); }
 
 /* ------------------------------------------------------------------ console: none */
+/* The program may open a console for its log: it seems to get one (writes go to our log),
+   but there is no console window. */
+API(KERNEL32, AllocConsole, 0) { LOG(LOG_API, "AllocConsole"); return 1; }
+API(KERNEL32, FreeConsole, 0) { return 1; }
+API(KERNEL32, GetConsoleWindow, 0) { return 0; }
+API(KERNEL32, GetConsoleScreenBufferInfo, 2)
+{
+    uint32_t b = ARG(1);                /* CONSOLE_SCREEN_BUFFER_INFO: an 80x300 buffer, 80x25 shown */
+    memset(gptr(b), 0, 22);
+    W16(b, 80); W16(b + 2, 300);
+    W16(b + 8, 7);                      /* wAttributes: grey on black */
+    W16(b + 14, 79); W16(b + 16, 24);   /* srWindow */
+    W16(b + 18, 80); W16(b + 20, 25);   /* dwMaximumWindowSize */
+    return 1;
+}
+API(KERNEL32, SetConsoleScreenBufferSize, 2) { return 1; }
+API(KERNEL32, SetConsoleTextAttribute, 2) { return 1; }
+API(KERNEL32, SetConsoleWindowInfo, 3) { return 1; }
+API(KERNEL32, SetConsoleTitleW, 1)
+{
+    char b[512];
+    LOG(LOG_API, "SetConsoleTitleW(\"%s\")", gwstr(ARG(0), b, sizeof b));
+    return 1;
+}
 API(KERNEL32, GetConsoleCP, 0) { return 437; }
 API(KERNEL32, GetConsoleOutputCP, 0) { return 437; }
 API(KERNEL32, GetConsoleMode, 2) { set_last_error(6); return 0; }

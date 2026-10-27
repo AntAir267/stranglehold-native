@@ -360,3 +360,43 @@ API(WINMM, mciSendCommandA, 4)
         ARG(0), ARG(1), ARG(2));
     return 263;                          /* MCIERR_INVALID_DEVICE_NAME: the game skips the video */
 }
+
+/* ------------------------------------------------------------------ waveIn, waveOut: no devices */
+/* Sound plays through FMOD's DirectSound output (dsound.c); recording is not offered. The
+   program sees a machine without wave devices. */
+#define MMSYSERR_BADDEVICEID 2
+#define MMSYSERR_INVALHANDLE 5
+#define MMSYSERR_NODRIVER 6
+
+API(WINMM, waveInGetNumDevs, 0) { return 0; }
+API(WINMM, waveInGetDevCapsA, 3) { return MMSYSERR_BADDEVICEID; }
+API(WINMM, waveInOpen, 6)
+{
+    if (ARG(0)) W32(ARG(0), 0);
+    LOG(LOG_SOUND, "waveInOpen(device %d): no recording devices", (int)ARG(1));
+    return MMSYSERR_NODRIVER;
+}
+API(WINMM, waveInClose, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveInPrepareHeader, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveInUnprepareHeader, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveInAddBuffer, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveInStart, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveInReset, 1) { return MMSYSERR_INVALHANDLE; }
+
+API(WINMM, waveOutGetNumDevs, 0) { return 0; }
+API(WINMM, waveOutGetDevCapsA, 3) { return MMSYSERR_BADDEVICEID; }
+API(WINMM, waveOutOpen, 6)
+{
+    if (ARG(0)) W32(ARG(0), 0);
+    LOG(LOG_SOUND, "waveOutOpen(device %d): no wave devices (sound goes through DirectSound)", (int)ARG(1));
+    return MMSYSERR_NODRIVER;
+}
+API(WINMM, waveOutClose, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutPrepareHeader, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutUnprepareHeader, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutWrite, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutPause, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutRestart, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutReset, 1) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutGetPosition, 3) { return MMSYSERR_INVALHANDLE; }
+API(WINMM, waveOutSetVolume, 2) { return ARG(0) ? MMSYSERR_INVALHANDLE : MMSYSERR_NODRIVER; }

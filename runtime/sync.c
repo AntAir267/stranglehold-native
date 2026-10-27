@@ -308,16 +308,53 @@ int wait_handle(uint32_t h, uint32_t ms) { return wait_handles(1, &h, 0, ms); }
 
 static void kick(void) { pthread_cond_broadcast(&kcond); }
 
-API(KERNEL32, CreateEventA, 4)
+/* an event for the runtime (WSACreateEvent) */
+uint32_t event_create(int manual, int initial)
 {
     Event *e = calloc(1, sizeof *e);
-    e->manual = ARG(1) != 0;
-    e->signalled = ARG(2) != 0;
-    uint32_t h = handle_new(H_EVENT, e);
-    LOG(LOG_THREAD, "CreateEventA(manual=%d, initial=%d, %s) -> %x", e->manual, e->signalled,
+    e->manual = manual;
+    e->signalled = initial;
+    return handle_new(H_EVENT, e);
+}
+
+API(KERNEL32, CreateEventA, 4)
+{
+    uint32_t h = event_create(ARG(1) != 0, ARG(2) != 0);
+    LOG(LOG_THREAD, "CreateEventA(manual=%d, initial=%d, %s) -> %x", ARG(1) != 0, ARG(2) != 0,
         ARG(3) ? gstr(ARG(3)) : "unnamed", h);
     set_last_error(0);
     return h;
+}
+
+/* events are not named: one by name is never there */
+API(KERNEL32, OpenEventW, 3)
+{
+    char b[256];
+    LOG(LOG_THREAD, "OpenEventW(\"%s\") -> not found", gwstr(ARG(2), b, sizeof b));
+    set_last_error(2);
+    return 0;
+}
+
+/* PulseEvent: releases the waiting threads and leaves the event reset. An auto-reset event
+   acts as SetEvent (the one released waiter resets it; with none waiting it stays set, which
+   Windows would not do [guess: harmless]); a manual-reset one is set, the waiters woken, and
+   reset once they had a moment to run. */
+API(KERNEL32, PulseEvent, 1)
+{
+    pthread_mutex_lock(&klock);
+    Event *e = handle_get(ARG(0), H_EVENT);
+    if (e) {
+        e->signalled = 1;
+        kick();
+    }
+    pthread_mutex_unlock(&klock);
+    if (e && e->manual) {
+        sched_yield();
+        pthread_mutex_lock(&klock);
+        e->signalled = 0;
+        pthread_mutex_unlock(&klock);
+    }
+    return e != NULL;
 }
 
 API(KERNEL32, SetEvent, 1)
@@ -333,17 +370,24 @@ API(KERNEL32, SetEvent, 1)
     return e != NULL;
 }
 
-API(KERNEL32, CreateMutexA, 3)
+static uint32_t create_mutex(int owned, const char *name)
 {
     Mutex *m = calloc(1, sizeof *m);
-    if (ARG(1)) {
+    if (owned) {
         m->owner = current_cpu();
         m->count = 1;
     }
     uint32_t h = handle_new(H_MUTEX, m);
-    LOG(LOG_THREAD, "CreateMutexA(owned=%d, %s) -> %x", ARG(1) != 0, ARG(2) ? gstr(ARG(2)) : "unnamed", h);
+    LOG(LOG_THREAD, "CreateMutex(owned=%d, %s) -> %x", owned, name ? name : "unnamed", h);
     set_last_error(0);                   /* the game treats any error here as "already running" */
     return h;
+}
+
+API(KERNEL32, CreateMutexA, 3) { return create_mutex(ARG(1) != 0, gstr(ARG(2))); }
+API(KERNEL32, CreateMutexW, 3)
+{
+    char b[256];
+    return create_mutex(ARG(1) != 0, ARG(2) ? gwstr(ARG(2), b, sizeof b) : NULL);
 }
 
 API(KERNEL32, ReleaseMutex, 1)
@@ -480,6 +524,19 @@ API(KERNEL32, InterlockedExchange, 2)
     return __atomic_exchange_n((uint32_t *)gptr(ARG(0)), ARG(1), __ATOMIC_SEQ_CST);
 }
 
+/* (destination, exchange, comparand): the value before */
+API(KERNEL32, InterlockedCompareExchange, 3)
+{
+    uint32_t expected = ARG(2);
+    __atomic_compare_exchange_n((uint32_t *)gptr(ARG(0)), &expected, ARG(1), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return expected;
+}
+
+API(KERNEL32, InterlockedExchangeAdd, 2)
+{
+    return __atomic_fetch_add((uint32_t *)gptr(ARG(0)), ARG(1), __ATOMIC_SEQ_CST);
+}
+
 /* ------------------------------------------------------------------ critical sections
    The program's CRITICAL_SECTION (24 bytes) keeps an index into our table at +0x10 and a
    marker at +0x14. */
@@ -515,6 +572,13 @@ API(KERNEL32, InitializeCriticalSection, 1)
     return 0;
 }
 
+/* (the spin count makes no difference here) */
+API(KERNEL32, InitializeCriticalSectionAndSpinCount, 2)
+{
+    w_KERNEL32_InitializeCriticalSection_body(c);
+    return 1;
+}
+
 API(KERNEL32, DeleteCriticalSection, 1)
 {
     W32(ARG(0) + 0x14, 0);
@@ -532,6 +596,11 @@ API(KERNEL32, EnterCriticalSection, 1)
     return 0;
 }
 
+API(KERNEL32, TryEnterCriticalSection, 1)
+{
+    return pthread_mutex_trylock(cs_get(ARG(0))) == 0;
+}
+
 API(KERNEL32, LeaveCriticalSection, 1)
 {
     pthread_mutex_unlock(cs_get(ARG(0)));
@@ -543,15 +612,17 @@ void sync_init(void) {}
 /* ------------------------------------------------------------------ more objects (LA Rush) */
 typedef struct { int count, max; } Semaphore;
 
-API(KERNEL32, ResetEvent, 1)
+int event_reset(uint32_t h)
 {
     pthread_mutex_lock(&klock);
-    Event *e = handle_get(ARG(0), H_EVENT);
+    Event *e = handle_get(h, H_EVENT);
     if (e)
         e->signalled = 0;
     pthread_mutex_unlock(&klock);
     return e != NULL;
 }
+
+API(KERNEL32, ResetEvent, 1) { return event_reset(ARG(0)); }
 
 API(KERNEL32, CreateSemaphoreA, 4)
 {
@@ -602,6 +673,25 @@ API(KERNEL32, ResumeThread, 1)
     pthread_mutex_unlock(&klock);
     return prev;
 }
+API(KERNEL32, GetExitCodeThread, 2)
+{
+    pthread_mutex_lock(&klock);
+    Thread *t = handle_get(ARG(0), H_THREAD);
+    if (t && ARG(1)) W32(ARG(1), t->finished ? t->exit_code : 259);       /* STILL_ACTIVE */
+    pthread_mutex_unlock(&klock);
+    if (!t && ARG(0) == 0xfffffffeu) { if (ARG(1)) W32(ARG(1), 259); return 1; }   /* the calling thread */
+    if (!t) set_last_error(6);
+    return t != NULL;
+}
+
+/* a host thread cannot be stopped from outside: refused, the thread runs on */
+API(KERNEL32, TerminateThread, 2)
+{
+    LOG(LOG_ALWAYS, "TerminateThread(%x, %u) refused", ARG(0), ARG(1));
+    set_last_error(5);
+    return 0;
+}
+
 API(KERNEL32, GetCurrentThread, 0) { return 0xfffffffeu; }
 API(KERNEL32, GetCurrentThreadId, 0) { return current_thread_id(); }
 API(KERNEL32, GetCurrentProcessId, 0) { return 0x7d0u; }

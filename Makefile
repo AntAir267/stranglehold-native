@@ -32,10 +32,13 @@ all: build/stranglehold build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0
 
 # (the translator's own scripts: other tools/ changes don't regenerate)
 RECOMP_PY = $(wildcard $(addprefix tools/,recomp.py codegen.py discover.py image.py pe.py fpustack.py simd.py x86.py))
-gen/funcs.h: $(RECOMP_PY) $(BUILD_CFG)
+# (recomp.py rewrites only the files whose contents change, so the stamp marks the run and the
+# objects rebuild only from files that really changed)
+gen/.stamp: $(RECOMP_PY) $(BUILD_CFG)
 	$(PY) tools/recomp.py $(GAME) $(BUILD_CFG) gen
-gen/table.c gen/stubs.c: gen/funcs.h ;
-gen/files.mk: gen/funcs.h
+	touch $@
+gen/funcs.h gen/table.c gen/stubs.c gen/x87_special.c: gen/.stamp ;
+gen/files.mk: gen/.stamp
 	@echo 'GEN_CODE = $(sort $(wildcard gen/code_*.c))' > $@
 
 build/obj/gen_%.o: gen/%.c gen/funcs.h runtime/cpu.h | build/obj

@@ -189,7 +189,7 @@ typedef struct { const char *name; uint32_t d1; uint16_t d2, d3; uint8_t d4[8]; 
 enum { G_XAXIS, G_YAXIS, G_ZAXIS, G_RXAXIS, G_RYAXIS, G_RZAXIS, G_SLIDER, G_BUTTON, G_KEY, G_POV,
        G_UNKNOWN, G_SYSMOUSE, G_SYSKEYBOARD, G_JOYSTICK, G_IUNKNOWN, G_IDI_A, G_IDI_W, G_IDI2_A,
        G_IDI2_W, G_IDI7_A, G_IDI7_W, G_IDI8_A, G_IDEV_A, G_IDEV_W, G_IDEV2_A, G_IDEV2_W, G_IDEV7_A,
-       G_IDEV7_W, G_IDEV8_A, G_IEFFECT, G_CONSTANT, G_RAMP, G_SQUARE, G_SINE, G_TRIANGLE, G_SAWUP,
+       G_IDEV7_W, G_IDEV8_A, G_IDI8_W, G_IDEV8_W, G_IEFFECT, G_CONSTANT, G_RAMP, G_SQUARE, G_SINE, G_TRIANGLE, G_SAWUP,
        G_SAWDOWN, G_SPRING, G_DAMPER, G_INERTIA, G_FRICTION, G_CUSTOM, G_COUNT };
 #define DI_D4 {0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}
 #define FF_D4 {0x9a, 0xd0, 0x00, 0xa0, 0xc9, 0xa0, 0x6e, 0x35}
@@ -224,6 +224,11 @@ static const GuidDef guids[G_COUNT] = {
     [G_IDEV7_A] = {"IID_IDirectInputDevice7A", 0x57d7c6bc, 0x2356, 0x11d3, DX7_D4},
     [G_IDEV7_W] = {"IID_IDirectInputDevice7W", 0x57d7c6bd, 0x2356, 0x11d3, DX7_D4},
     [G_IDEV8_A] = {"IID_IDirectInputDevice8A", 0x54d41080, 0xdc15, 0x4833, {0xa4, 0x1b, 0x74, 0x8f, 0x73, 0xa3, 0x81, 0x79}},
+    /* the Unicode interfaces (Unreal Engine 3 asks for these): the same objects; only their
+       string-carrying calls differ (EnumDevices, GetDeviceInfo, EnumObjects, GetObjectInfo use
+       the W structures), which keyboard and mouse use does not reach [guess: watch the log] */
+    [G_IDI8_W] = {"IID_IDirectInput8W", 0xbf798031, 0x483a, 0x4da2, {0xaa, 0x99, 0x5d, 0x64, 0xed, 0x36, 0x97, 0x00}},
+    [G_IDEV8_W] = {"IID_IDirectInputDevice8W", 0x54d41081, 0xdc15, 0x4833, {0xa4, 0x1b, 0x74, 0x8f, 0x73, 0xa3, 0x81, 0x79}},
     [G_IEFFECT] = {"IID_IDirectInputEffect", 0xe7e1f7c0, 0x88d2, 0x11d0, FF_D4},
     [G_CONSTANT] = {"GUID_ConstantForce", 0x13541c20, 0x8e33, 0x11d0, FF_D4},
     [G_RAMP] = {"GUID_RampForce", 0x13541c21, 0x8e33, 0x11d0, FF_D4},
@@ -1473,7 +1478,7 @@ static ComClass cls_dev, cls_eff, cls_dev8;
 
 static int is_device_iid(int g)
 {
-    return g == G_IUNKNOWN || g == G_IDEV_A || g == G_IDEV2_A || g == G_IDEV7_A || g == G_IDEV8_A;
+    return g == G_IUNKNOWN || g == G_IDEV_A || g == G_IDEV2_A || g == G_IDEV7_A || g == G_IDEV8_A || g == G_IDEV8_W;
 }
 
 METHOD(dev_QueryInterface, 3)
@@ -2649,7 +2654,7 @@ METHOD(di8_QueryInterface, 3)
     DInput *di = di_of(ARG(0));
     uint32_t ppv = ARG(2), r = DIERR_NOINTERFACE;
     int g = guid_id(ARG(1));
-    if (g == G_IUNKNOWN || g == G_IDI8_A) {
+    if (g == G_IUNKNOWN || g == G_IDI8_A || g == G_IDI8_W) {
         pthread_mutex_lock(&in_lock);
         di->refs++;
         pthread_mutex_unlock(&in_lock);
@@ -2681,7 +2686,7 @@ API(DINPUT8, DirectInput8Create, 5)
         r = DIERR_INVALIDPARAM;
     else if (outer)
         r = DIERR_NOAGGREGATION;
-    else if (guid_id(riid) != G_IDI8_A)
+    else if (guid_id(riid) != G_IDI8_A && guid_id(riid) != G_IDI8_W)
         r = DIERR_NOINTERFACE;
     else if (version > 0x800)
         r = DIERR_OLDDIRECTINPUTVERSION;

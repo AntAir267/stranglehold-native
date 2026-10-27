@@ -122,13 +122,20 @@ API(GDI32, CreateCompatibleDC, 1)
     return h;
 }
 
-API(GDI32, CreateDCA, 4)
+static uint32_t create_dc(const char *driver, const char *device)
 {
     stock_init();
     uint32_t h = obj_new(O_DC);
     if (h) { dc_defaults(obj(h)); obj(h)->hwnd = 0xfffffffeu; }
-    LOG(LOG_WIN, "CreateDCA(\"%s\", \"%s\") -> %x", gstr(ARG(0)) ? gstr(ARG(0)) : "", gstr(ARG(1)) ? gstr(ARG(1)) : "", h);
+    LOG(LOG_WIN, "CreateDC(\"%s\", \"%s\") -> %x", driver ? driver : "", device ? device : "", h);
     return h;
+}
+
+API(GDI32, CreateDCA, 4) { return create_dc(gstr(ARG(0)), gstr(ARG(1))); }
+API(GDI32, CreateDCW, 4)
+{
+    char a[128], b[128];
+    return create_dc(gwstr(ARG(0), a, sizeof a), gwstr(ARG(1), b, sizeof b));
 }
 
 API(GDI32, DeleteDC, 1) { Obj *o = obj(ARG(0)); if (o && (o->type == O_DC || o->type == O_MEMDC)) o->type = 0; return 1; }
@@ -165,13 +172,27 @@ API(GDI32, SelectObject, 2)
 
 API(GDI32, SelectPalette, 3) { Obj *d = obj(ARG(0)); uint32_t o = d ? d->sel_pal : 0; if (d) d->sel_pal = ARG(1); return o; }
 
-API(GDI32, GetObjectA, 3)
+/* fonts are kept as LOGFONTA (60 bytes); LOGFONTW is the same with the face name in UTF-16 (92) */
+static void logfont_to_w(const uint8_t *a, uint8_t *w)
 {
-    Obj *o = obj(ARG(0));
-    uint32_t n = ARG(1), out = ARG(2);
+    memcpy(w, a, 28);
+    for (int i = 0; i < 32; i++) { w[28 + 2 * i] = a[28 + i]; w[29 + 2 * i] = 0; }
+    w[90] = w[91] = 0;
+}
+
+static uint32_t get_object(uint32_t h, uint32_t n, uint32_t out, int wide)
+{
+    Obj *o = obj(h);
     if (!o) return 0;
     switch (o->type) {
     case O_FONT:
+        if (wide) {
+            uint8_t lw[92];
+            if (!out) return 92;
+            logfont_to_w(o->logfont, lw);
+            memcpy(gptr(out), lw, n < 92 ? n : 92);
+            return n < 92 ? n : 92;
+        }
         if (!out) return 60;
         memcpy(gptr(out), o->logfont, n < 60 ? n : 60);
         return n < 60 ? n : 60;
@@ -200,6 +221,9 @@ API(GDI32, GetObjectA, 3)
     return 0;
 }
 
+API(GDI32, GetObjectA, 3) { return get_object(ARG(0), ARG(1), ARG(2), 0); }
+API(GDI32, GetObjectW, 3) { return get_object(ARG(0), ARG(1), ARG(2), 1); }
+
 /* ------------------------------------------------------------------ object creation */
 API(GDI32, CreateSolidBrush, 1) { return gdi_solid_brush(ARG(0)); }
 API(GDI32, CreateHatchBrush, 2) { uint32_t h = gdi_solid_brush(ARG(1)); if (h) obj(h)->style = 2; return h; }
@@ -227,6 +251,17 @@ API(GDI32, CreateFontIndirectA, 1)
     stock_init();
     uint32_t h = obj_new(O_FONT);
     if (h) memcpy(obj(h)->logfont, gptr(ARG(0)), 60);
+    return h;
+}
+
+API(GDI32, CreateFontIndirectW, 1)
+{
+    stock_init();
+    uint32_t h = obj_new(O_FONT);
+    if (!h) return 0;
+    uint8_t *lf = obj(h)->logfont;
+    memcpy(lf, gptr(ARG(0)), 28);
+    gwstr(ARG(0) + 28, (char *)lf + 28, 32);
     return h;
 }
 

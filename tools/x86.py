@@ -47,7 +47,12 @@ def decode(code, addr):
                             m.disp & 0xffffffff))
             else:
                 return None
-        return Insn(ci.address, ci.size, ci.mnemonic, ops, bytes(ci.bytes),
+        mn = ci.mnemonic
+        # a rep/bnd prefix on a control transfer changes nothing ("repz ret", AMD's branch
+        # predictor advice in MSVC 2005's __security_check_cookie): the plain instruction
+        if ' ' in mn and mn.split()[-1] in ('ret', 'retn', 'jmp', 'call'):
+            mn = mn.split()[-1]
+        return Insn(ci.address, ci.size, mn, ops, bytes(ci.bytes),
                     (ci.mnemonic + ' ' + ci.op_str).strip(), bytes(p for p in ci.prefix if p))
     return None
 

@@ -430,10 +430,27 @@ static void load_module(const ModuleEntry *me)
     free(f);
 }
 
+/* An imported variable (MSVC name "?name@@3..." or a static member "?name@class@@0-2...") from a DLL
+   that is not translated (wxWidgets: wxDefaultSize, wxAppConsole::ms_appInitFn, which a start-up
+   initialiser writes): the slot points at a block of program memory instead of a thunk. wx's
+   default size and position are (-1, -1). */
+static int is_data_import(const char *n)
+{
+    const char *at = n[0] == '?' ? strstr(n, "@@") : NULL;
+    return at && at[2] >= '0' && at[2] <= '4';
+}
+
 static void connect_imports(void)
 {
     for (int i = 0; i < import_count; i++) {
         const ImportEntry *e = &import_table[i];
+        if (is_data_import(e->name)) {
+            uint32_t b = galloc(64);
+            memset(gptr(b), !strncmp(e->name, "?wxDefault", 10) ? 0xff : 0, 64);
+            W32(e->iat, b);
+            LOG(LOG_API, "%s!%s: a variable at %08x", e->dll, e->name, b);
+            continue;
+        }
         char *name = malloc(strlen(e->dll) + strlen(e->name) + 2);
         sprintf(name, "%s!%s", e->dll, e->name);
         W32(e->iat, thunk_addr(e->fn, name));
@@ -917,7 +934,7 @@ int main(int argc, char **argv)
     extern void prof_init(void);
     prof_init();
     runtime_setup();
-    logmsg(LOG_ALWAYS, "LA Rush native (%s): %d functions, game folder %s", BUILD_NAME, func_count, game_dir);
+    logmsg(LOG_ALWAYS, "Stranglehold native (%s): %d functions, game folder %s", BUILD_NAME, func_count, game_dir);
 
     CPU *c = cpu_new(STACK_RESERVE);
     main_cpu = c;

@@ -127,11 +127,11 @@ void win_init(void)
     input_script_key_hook = script_key;
     if (headless)
         return;
-    SDL_SetHint(SDL_HINT_APP_NAME, "LA Rush");
+    SDL_SetHint(SDL_HINT_APP_NAME, "Stranglehold");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");
     /* the window's app ID (Wayland) / class (X11) matches the applications-menu entry
        (stranglehold-native.desktop, make install), so the dock shows the game's icon */
-    SDL_SetAppMetadata("L.A. Rush", NULL, "stranglehold-native");
+    SDL_SetAppMetadata("Stranglehold", NULL, "stranglehold-native");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS | SDL_INIT_AUDIO))
         fatal("SDL_Init: %s", SDL_GetError());
     sdl_ok = 1;
@@ -206,7 +206,7 @@ static void desktop_probe(void)
     }
     if (window)
         goto measure;
-    window = SDL_CreateWindow("L.A. Rush", 1280, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN |
+    window = SDL_CreateWindow("Stranglehold", 1280, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN |
                               SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     if (!window)
         fatal("SDL_CreateWindow: %s", SDL_GetError());

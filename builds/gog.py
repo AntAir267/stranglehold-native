@@ -24,7 +24,14 @@ MODULES = [
     ('DFEngine.dll', 'Binaries/DFEngine.dll', 'b88e12a3fa79f102f7bef1bea7e3fb0cadc0db5f26ab4be19b9dd8013ed47344'),
 ]
 
-EXTRA_ENTRIES = []
+# Functions discovery turned away. 0xb89650: a virtual method (vtable pointers at 0xd5f638 and
+# three more, all relocated) with an SEH prologue, rejected as "inside the code of another
+# function" (the preceding function's bounded-by-scan jump table runs into it) [verified: the
+# translated program called it, 0xb8e776]. The other 50 relocated pointers rejected that way
+# point into functions (exception handlers' continuations, catch blocks) [verified: their bytes];
+# the 833 padded starts nothing references are dead library code (every pointer here is
+# relocated, and direct calls are followed) [verified: work/why_rejected.py].
+EXTRA_ENTRIES = [0xb89650]
 NOT_ENTRIES = []
 JUMP_TABLES = {}
 NONLOCAL_JUMPS = []

@@ -60,25 +60,31 @@ static pthread_mutex_t wlock = PTHREAD_MUTEX_INITIALIZER;
 typedef struct {
     char name[96];
     uint32_t atom, style, proc, clsextra, wndextra, hinst, icon, cursor, brush, menuname, iconsm;
+    int wide;                           /* registered with RegisterClassExW: its windows are Unicode */
     uint8_t extra[64];
 } Cls;
 #define MAXCLS 128
 static Cls classes[MAXCLS];
 static int nclasses;
 
-static Cls *class_find(uint32_t name)
+/* a class by atom or by name (the program's string: UTF-16 when wide) */
+static Cls *class_find_n(uint32_t name, int wide)
 {
+    char b[96];
+    const char *n = name < 0x10000 ? NULL : wide ? gwstr(name, b, sizeof b) : gptr(name);
     for (int i = 0; i < nclasses; i++) {
-        if (name < 0x10000 ? classes[i].atom == name : !strcasecmp(classes[i].name, gptr(name)))
+        if (n ? !strcasecmp(classes[i].name, n) : classes[i].atom == name)
             return &classes[i];
     }
     return NULL;
 }
+static Cls *class_find(uint32_t name) { return class_find_n(name, 0); }
 
 static uint32_t class_add(uint32_t style, uint32_t proc, uint32_t clsextra, uint32_t wndextra, uint32_t hinst,
-                          uint32_t icon, uint32_t cursor, uint32_t brush, uint32_t menuname, uint32_t name, uint32_t iconsm)
+                          uint32_t icon, uint32_t cursor, uint32_t brush, uint32_t menuname, uint32_t name, uint32_t iconsm,
+                          int wide)
 {
-    if (class_find(name)) {
+    if (class_find_n(name, wide)) {
         set_last_error(1410);           /* ERROR_CLASS_ALREADY_EXISTS */
         return 0;
     }
@@ -88,8 +94,11 @@ static uint32_t class_add(uint32_t style, uint32_t proc, uint32_t clsextra, uint
     memset(k, 0, sizeof *k);
     if (name < 0x10000)
         snprintf(k->name, sizeof k->name, "#%u", name);
+    else if (wide)
+        gwstr(name, k->name, sizeof k->name);
     else
         snprintf(k->name, sizeof k->name, "%s", gptr(name));
+    k->wide = wide;
     extern uint32_t atom_add(const char *s);
     k->atom = atom_add(k->name);
     k->style = style; k->proc = proc; k->clsextra = clsextra; k->wndextra = wndextra; k->hinst = hinst;
@@ -102,14 +111,22 @@ API(USER32, RegisterClassA, 1)
 {
     uint32_t wc = ARG(0);
     return class_add(R32(wc), R32(wc + 4), R32(wc + 8), R32(wc + 12), R32(wc + 16), R32(wc + 20),
-                     R32(wc + 24), R32(wc + 28), R32(wc + 32), R32(wc + 36), 0);
+                     R32(wc + 24), R32(wc + 28), R32(wc + 32), R32(wc + 36), 0, 0);
 }
 
 API(USER32, RegisterClassExA, 1)
 {
     uint32_t wc = ARG(0);
     return class_add(R32(wc + 4), R32(wc + 8), R32(wc + 12), R32(wc + 16), R32(wc + 20), R32(wc + 24),
-                     R32(wc + 28), R32(wc + 32), R32(wc + 36), R32(wc + 40), R32(wc + 44));
+                     R32(wc + 28), R32(wc + 32), R32(wc + 36), R32(wc + 40), R32(wc + 44), 0);
+}
+
+/* WNDCLASSEXW has the layout of the A form, its names in UTF-16 */
+API(USER32, RegisterClassExW, 1)
+{
+    uint32_t wc = ARG(0);
+    return class_add(R32(wc + 4), R32(wc + 8), R32(wc + 12), R32(wc + 16), R32(wc + 20), R32(wc + 24),
+                     R32(wc + 28), R32(wc + 32), R32(wc + 36), R32(wc + 40), R32(wc + 44), 1);
 }
 
 API(USER32, UnregisterClassA, 2)
@@ -159,6 +176,7 @@ typedef struct {
     Cls *cls;
     uint32_t proc, style, exstyle, id, userdata, parent, owner, hinst, menu, ctxhelp;
     uint32_t tid;                       /* the thread that created it: its messages go to that queue */
+    int wide;                           /* Unicode window (its class registered with ...W): text messages carry UTF-16 */
     int32_t x, y, w, h;                 /* window rectangle (screen; children: parent client) */
     char text[256];
     int need_paint, shown_once;
@@ -317,11 +335,12 @@ static void host_follow(Win *w)
 
 static uint32_t create_window(CPU *c, uint32_t exstyle, uint32_t cname, uint32_t title, uint32_t style,
                               int32_t x, int32_t y, int32_t cx, int32_t cy, uint32_t parent, uint32_t menu,
-                              uint32_t hinst, uint32_t param)
+                              uint32_t hinst, uint32_t param, int wide)
 {
-    Cls *k = class_find(cname);
+    Cls *k = class_find_n(cname, wide);
     if (!k) {
-        LOG(LOG_ALWAYS, "CreateWindowEx: unknown class %s", cname < 0x10000 ? "#atom" : gstr(cname));
+        char b[96];
+        LOG(LOG_ALWAYS, "CreateWindowEx: unknown class %s", cname < 0x10000 ? "#atom" : wide ? gwstr(cname, b, sizeof b) : gstr(cname));
         set_last_error(1407);
         return 0;
     }
@@ -331,6 +350,7 @@ static uint32_t create_window(CPU *c, uint32_t exstyle, uint32_t cname, uint32_t
     uint32_t h = w->hwnd;
     w->tid = current_thread_id();
     w->cls = k;
+    w->wide = k->wide;
     w->proc = k->proc;
     w->style = style;
     w->exstyle = exstyle;
@@ -338,9 +358,10 @@ static uint32_t create_window(CPU *c, uint32_t exstyle, uint32_t cname, uint32_t
     w->hinst = hinst;
     if (style & WS_CHILD) { w->parent = parent; w->id = menu; }
     else { w->owner = parent; w->menu = menu; }
-    if (title) snprintf(w->text, sizeof w->text, "%s", gptr(title));
-    LOG(LOG_WIN, "CreateWindowEx(\"%s\", \"%s\", style %x ex %x, %d,%d %dx%d, parent %x) -> %x",
-        k->name, title ? gptr(title) : "", style, exstyle, x, y, cx, cy, parent, h);
+    if (title && wide) gwstr(title, w->text, sizeof w->text);
+    else if (title) snprintf(w->text, sizeof w->text, "%s", gptr(title));
+    LOG(LOG_WIN, "CreateWindowEx%s(\"%s\", \"%s\", style %x ex %x, %d,%d %dx%d, parent %x) -> %x",
+        wide ? "W" : "A", k->name, w->text, style, exstyle, x, y, cx, cy, parent, h);
 
     uint32_t cs = galloc(48 + 8);
     W32(cs, param); W32(cs + 4, hinst); W32(cs + 8, menu); W32(cs + 12, parent);
@@ -394,7 +415,14 @@ static uint32_t create_window(CPU *c, uint32_t exstyle, uint32_t cname, uint32_t
 API(USER32, CreateWindowExA, 12)
 {
     return create_window(c, ARG(0), ARG(1), ARG(2), ARG(3), (int32_t)ARG(4), (int32_t)ARG(5),
-                         (int32_t)ARG(6), (int32_t)ARG(7), ARG(8), ARG(9), ARG(10), ARG(11));
+                         (int32_t)ARG(6), (int32_t)ARG(7), ARG(8), ARG(9), ARG(10), ARG(11), 0);
+}
+
+/* the same window manager: a window of a W class gets UTF-16 text in its messages */
+API(USER32, CreateWindowExW, 12)
+{
+    return create_window(c, ARG(0), ARG(1), ARG(2), ARG(3), (int32_t)ARG(4), (int32_t)ARG(5),
+                         (int32_t)ARG(6), (int32_t)ARG(7), ARG(8), ARG(9), ARG(10), ARG(11), 1);
 }
 
 uint32_t show_window(CPU *c, uint32_t hwnd, uint32_t cmd)
@@ -562,6 +590,10 @@ API(USER32, SetWindowLongA, 3)
     return old;
 }
 
+/* (the W forms: the same data) */
+API(USER32, GetWindowLongW, 2) { return w_USER32_GetWindowLongA_body(c); }
+API(USER32, SetWindowLongW, 3) { return w_USER32_SetWindowLongA_body(c); }
+
 API(USER32, GetClassLongA, 2)
 {
     Win *w = win_of(ARG(0));
@@ -589,6 +621,13 @@ API(USER32, GetClassNameA, 3)
     if (!w) return 0;
     gstrncpy(ARG(1), w->cls->name, ARG(2));
     return strlen(gptr(ARG(1)));
+}
+
+API(USER32, GetClassNameW, 3)
+{
+    Win *w = win_of(ARG(0));
+    if (!w) return 0;
+    return gwput(ARG(1), w->cls->name, ARG(2));
 }
 
 API(USER32, CallWindowProcA, 5) { return call_wndproc(c, ARG(0), ARG(1), ARG(2), ARG(3), ARG(4)); }
@@ -634,16 +673,43 @@ API(USER32, RemovePropA, 2)
     return d;
 }
 
-API(USER32, SetWindowTextA, 2)
+/* window text in the caller's form (wide or not); a window of the other form gets a converted copy */
+static uint32_t set_window_text(CPU *c, uint32_t hwnd, uint32_t str, int wide)
 {
-    return sendmsg(c, ARG(0), WM_SETTEXT, 0, ARG(1));
+    Win *w = win_of(hwnd);
+    if (!w) { set_last_error(1400); return 0; }
+    if (w->wide == wide || !str)
+        return sendmsg(c, hwnd, WM_SETTEXT, 0, str);
+    char b[256];
+    const char *t = wide ? gwstr(str, b, sizeof b) : gptr(str);
+    uint32_t n = strlen(t) + 1, tmp = galloc(w->wide ? 2 * n : n);
+    if (w->wide) gwput(tmp, t, n); else gstrncpy(tmp, t, n);
+    uint32_t r = sendmsg(c, hwnd, WM_SETTEXT, 0, tmp);
+    gfree(tmp);
+    return r;
 }
 
-API(USER32, GetWindowTextA, 3)
+static uint32_t get_window_text(CPU *c, uint32_t hwnd, uint32_t buf, uint32_t cap, int wide)
 {
-    if (!ARG(2)) return 0;
-    return sendmsg(c, ARG(0), WM_GETTEXT, ARG(2), ARG(1));
+    Win *w = win_of(hwnd);
+    if (!cap) return 0;
+    if (!w || w->wide == wide)
+        return sendmsg(c, hwnd, WM_GETTEXT, cap, buf);
+    uint32_t tmp = galloc(2 * cap + 2);
+    sendmsg(c, hwnd, WM_GETTEXT, cap, tmp);
+    char b[256];
+    const char *t = w->wide ? gwstr(tmp, b, sizeof b) : gptr(tmp);
+    uint32_t n;
+    if (wide) n = gwput(buf, t, cap);
+    else { gstrncpy(buf, t, cap); n = strlen(gptr(buf)); }
+    gfree(tmp);
+    return n;
 }
+
+API(USER32, SetWindowTextA, 2) { return set_window_text(c, ARG(0), ARG(1), 0); }
+API(USER32, SetWindowTextW, 2) { return set_window_text(c, ARG(0), ARG(1), 1); }
+API(USER32, GetWindowTextA, 3) { return get_window_text(c, ARG(0), ARG(1), ARG(2), 0); }
+API(USER32, GetWindowTextW, 3) { return get_window_text(c, ARG(0), ARG(1), ARG(2), 1); }
 
 API(USER32, GetWindowTextLengthA, 1) { return sendmsg(c, ARG(0), WM_GETTEXTLENGTH, 0, 0); }
 API(USER32, SetWindowContextHelpId, 2) { Win *w = win_of(ARG(0)); if (w) w->ctxhelp = ARG(1); return w != NULL; }
@@ -748,19 +814,25 @@ API(USER32, GetDlgItem, 2)
     return 0;
 }
 
-API(USER32, FindWindowA, 2)
+static uint32_t find_window(uint32_t cname, uint32_t title, int wide)
 {
+    char cb[96], tb[256];
+    const char *cn = cname >= 0x10000 ? (wide ? gwstr(cname, cb, sizeof cb) : gstr(cname)) : NULL;
+    const char *tn = title ? (wide ? gwstr(title, tb, sizeof tb) : gstr(title)) : NULL;
     for (int i = 0; i < MAXWIN; i++) {
         Win *w = &wins[i];
         if (!w->used || (w->style & WS_CHILD)) continue;
-        if (ARG(0) && (ARG(0) < 0x10000 ? w->cls->atom != ARG(0) : strcasecmp(w->cls->name, gstr(ARG(0)))))
+        if (cname && (cn ? strcasecmp(w->cls->name, cn) : w->cls->atom != cname))
             continue;
-        if (ARG(1) && strcmp(w->text, gstr(ARG(1))))
+        if (tn && strcmp(w->text, tn))
             continue;
         return w->hwnd;
     }
     return 0;
 }
+
+API(USER32, FindWindowA, 2) { return find_window(ARG(0), ARG(1), 0); }
+API(USER32, FindWindowW, 2) { return find_window(ARG(0), ARG(1), 1); }
 
 API(USER32, EnumChildWindows, 3)
 {
@@ -952,6 +1024,9 @@ API(USER32, SendMessageA, 4)
     return sendmsg(c, ARG(0), ARG(1), ARG(2), ARG(3));
 }
 
+/* (the W forms: messages pass unchanged; a Unicode window's procedure reads its strings as UTF-16) */
+API(USER32, SendMessageW, 4) { return w_USER32_SendMessageA_body(c); }
+
 API(USER32, SendNotifyMessageA, 4) { sendmsg(c, ARG(0), ARG(1), ARG(2), ARG(3)); return 1; }
 API(USER32, InSendMessage, 0) { return 0; }
 API(USER32, GetMessagePos, 0) { return last_pos; }
@@ -1086,6 +1161,8 @@ API(USER32, PeekMessageA, 5)
     return next_message(ARG(0), ARG(1), ARG(2), ARG(3), ARG(4) & 1);
 }
 
+API(USER32, PeekMessageW, 5) { return w_USER32_PeekMessageA_body(c); }
+
 static void wait_a_little(void)
 {
     extern void det_yield(void);
@@ -1174,6 +1251,8 @@ API(USER32, DispatchMessageA, 1)
     return r;
 }
 
+API(USER32, DispatchMessageW, 1) { return w_USER32_DispatchMessageA_body(c); }
+
 /* ------------------------------------------------------------------ painting */
 API(USER32, InvalidateRect, 3)
 {
@@ -1230,14 +1309,16 @@ API(USER32, ReleaseDC, 2) { return 1; }
 API(USER32, WindowFromDC, 1) { return main_hwnd; }
 
 /* ------------------------------------------------------------------ the default procedure */
-uint32_t def_window_proc(CPU *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
+/* wide: DefWindowProcW, whose strings (CREATESTRUCT names, WM_SETTEXT, WM_GETTEXT) are UTF-16 */
+static uint32_t def_window_proc_x(CPU *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp, int wide)
 {
     Win *w = win_of(hwnd);
     switch (msg) {
     case WM_NCCREATE:
         if (w && lp && R32(lp + 36)) {
             uint32_t t = R32(lp + 36);
-            if (t >= 0x10000) snprintf(w->text, sizeof w->text, "%s", gptr(t));
+            if (t >= 0x10000 && wide) gwstr(t, w->text, sizeof w->text);
+            else if (t >= 0x10000) snprintf(w->text, sizeof w->text, "%s", gptr(t));
         }
         return 1;
     case WM_NCCALCSIZE: {
@@ -1251,12 +1332,14 @@ uint32_t def_window_proc(CPU *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint3
     }
     case WM_SETTEXT:
         if (w) {
-            snprintf(w->text, sizeof w->text, "%s", lp ? gptr(lp) : "");
+            if (wide && lp) gwstr(lp, w->text, sizeof w->text);
+            else snprintf(w->text, sizeof w->text, "%s", lp ? gptr(lp) : "");
             if (hwnd == main_hwnd) host_window_title(w->text);
         }
         return 1;
     case WM_GETTEXT:
         if (!w || !wp) return 0;
+        if (wide) return gwput(lp, w->text, wp);
         gstrncpy(lp, w->text, wp);
         return strlen(gptr(lp));
     case WM_GETTEXTLENGTH:
@@ -1301,7 +1384,13 @@ uint32_t def_window_proc(CPU *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint3
     }
 }
 
+uint32_t def_window_proc(CPU *c, uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
+{
+    return def_window_proc_x(c, hwnd, msg, wp, lp, 0);
+}
+
 API(USER32, DefWindowProcA, 4) { return def_window_proc(c, ARG(0), ARG(1), ARG(2), ARG(3)); }
+API(USER32, DefWindowProcW, 4) { return def_window_proc_x(c, ARG(0), ARG(1), ARG(2), ARG(3), 1); }
 API(USER32, DefFrameProcA, 5) { return def_window_proc(c, ARG(0), ARG(2), ARG(3), ARG(4)); }
 API(USER32, DefMDIChildProcA, 4) { return def_window_proc(c, ARG(0), ARG(1), ARG(2), ARG(3)); }
 

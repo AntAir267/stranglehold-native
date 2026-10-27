@@ -264,15 +264,13 @@ static int intro_skipped(const char *name)
     return 0;
 }
 
-API(KERNEL32, CreateFileA, 7)
+static uint32_t create_file(const char *name, uint32_t access, uint32_t disp, const char *fn)
 {
-    const char *name = gstr(ARG(0));
     if (intro_skipped(name)) {
-        LOG(LOG_FILE, "CreateFileA(\"%s\"): skipped (skip_intro)", name);
+        LOG(LOG_FILE, "%s(\"%s\"): skipped (skip_intro)", fn, name);
         set_last_error(2);
         return 0xffffffffu;
     }
-    uint32_t access = ARG(1), disp = ARG(4);
     int writing = (access & GENERIC_WRITE) != 0;
     char host[2048];
     int keep = disp == 3 /* OPEN_EXISTING */ || disp == 4 /* OPEN_ALWAYS */;
@@ -288,7 +286,7 @@ API(KERNEL32, CreateFileA, 7)
     (void)exists;
     int fd = open(host, fl | O_CLOEXEC, 0644);
     if (fd < 0) {
-        LOG(LOG_FILE, "CreateFileA(\"%s\", %x, disp %u) -> failed (%s)", name, access, disp, host);
+        LOG(LOG_FILE, "%s(\"%s\", %x, disp %u) -> failed (%s)", fn, name, access, disp, host);
         set_last_error(errno == ENOENT ? 2 : errno == EEXIST ? 80 : 5);
         return 0xffffffffu;
     }
@@ -302,10 +300,52 @@ API(KERNEL32, CreateFileA, 7)
     f->fd = fd;
     snprintf(f->path, sizeof f->path, "%s", host);
     uint32_t h = handle_new(H_FILE, f);
-    LOG(LOG_FILE, "CreateFileA(\"%s\", %s%s, disp %u) -> %x (%s)", name,
+    LOG(LOG_FILE, "%s(\"%s\", %s%s, disp %u) -> %x (%s)", fn, name,
         access & GENERIC_READ ? "R" : "", writing ? "W" : "", disp, h, host);
     set_last_error((disp == 2 || disp == 4) && exists ? 183 : 0);
     return h;
+}
+
+API(KERNEL32, CreateFileA, 7) { return create_file(gstr(ARG(0)), ARG(1), ARG(4), "CreateFileA"); }
+API(KERNEL32, CreateFileW, 7) { char b[1024]; return create_file(gwstr(ARG(0), b, sizeof b), ARG(1), ARG(4), "CreateFileW"); }
+
+/* OpenFile (16-bit style): OF_EXIST asks only whether the file is there; the OFSTRUCT gets
+   the full path. Returns the handle, 1 for OF_EXIST, or HFILE_ERROR. */
+static void full_path(const char *p, char *out, size_t n);
+API(KERNEL32, OpenFile, 3)
+{
+    const char *name = gstr(ARG(0));
+    uint32_t of = ARG(1), style = ARG(2);
+    char full[1024], host[2048];
+    full_path(name, full, sizeof full);
+    memset(gptr(of), 0, 136);
+    W8(of, 136);
+    W8(of + 1, 1);                                      /* fFixedDisk */
+    gstrncpy(of + 8, full, 128);
+    if (style & 0x4000) {                               /* OF_EXIST */
+        int ok = path_to_host(name, host, sizeof host, 0) && access(host, F_OK) == 0;
+        LOG(LOG_FILE, "OpenFile(\"%s\", OF_EXIST) -> %d", name, ok);
+        if (!ok) { W16(of + 2, 2); set_last_error(2); return 0xffffffffu; }
+        return 1;
+    }
+    if (style & 0x200) {                                /* OF_DELETE */
+        LOG(LOG_FILE, "OpenFile(\"%s\", OF_DELETE) refused", name);
+        W16(of + 2, 5);
+        set_last_error(5);
+        return 0xffffffffu;
+    }
+    uint32_t access_ = (style & 3) == 1 ? GENERIC_WRITE : (style & 3) == 2 ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ;
+    uint32_t h = create_file(name, access_, (style & 0x1000) ? 2 : 3, "OpenFile");   /* OF_CREATE */
+    if (h == 0xffffffffu) W16(of + 2, (uint16_t)get_last_error());
+    return h;
+}
+
+/* no devices to talk to */
+API(KERNEL32, DeviceIoControl, 8)
+{
+    LOG(LOG_FILE, "DeviceIoControl(%x, code %x) -> not supported", ARG(0), ARG(1));
+    set_last_error(1);                                  /* ERROR_INVALID_FUNCTION */
+    return 0;
 }
 
 /* An OVERLAPPED read or write completes at once: its result goes into the OVERLAPPED record
@@ -448,25 +488,27 @@ int close_file_handle(uint32_t h)
     return 1;
 }
 
-API(KERNEL32, DeleteFileA, 1)
+static int delete_file(const char *name)
 {
     char host[2048];
-    path_to_host(gstr(ARG(0)), host, sizeof host, 0);
+    path_to_host(name, host, sizeof host, 0);
     char user[2048];
     snprintf(user, sizeof user, "%s/", user_dir);
     int ok = 0;
     if (!strncmp(host, user, strlen(user)))
         ok = unlink(host) == 0;
-    LOG(LOG_FILE, "DeleteFileA(\"%s\") -> %d", gstr(ARG(0)), ok);
+    LOG(LOG_FILE, "DeleteFile(\"%s\") -> %d", name, ok);
     if (!ok) set_last_error(2);
     return ok;
 }
+API(KERNEL32, DeleteFileA, 1) { return delete_file(gstr(ARG(0))); }
+API(KERNEL32, DeleteFileW, 1) { char b[1024]; return delete_file(gwstr(ARG(0), b, sizeof b)); }
 
-API(KERNEL32, MoveFileA, 2)
+static int move_file(const char *src, const char *dst)
 {
     char from[2048], to[2048];
-    int exists = path_to_host(gstr(ARG(0)), from, sizeof from, 0);
-    path_to_host(gstr(ARG(1)), to, sizeof to, 1);
+    int exists = path_to_host(src, from, sizeof from, 0);
+    path_to_host(dst, to, sizeof to, 1);
     char user[2048];
     snprintf(user, sizeof user, "%s/", user_dir);
     int ok = 0;
@@ -476,17 +518,22 @@ API(KERNEL32, MoveFileA, 2)
         else
             ok = copy_file(from, to);           /* never remove from the game folder */
     }
-    LOG(LOG_FILE, "MoveFileA(\"%s\", \"%s\") -> %d", gstr(ARG(0)), gstr(ARG(1)), ok);
+    LOG(LOG_FILE, "MoveFile(\"%s\", \"%s\") -> %d", src, dst, ok);
     if (!ok) set_last_error(2);
     return ok;
 }
-
-API(KERNEL32, SetCurrentDirectoryA, 1)
+API(KERNEL32, MoveFileA, 2) { return move_file(gstr(ARG(0)), gstr(ARG(1))); }
+API(KERNEL32, MoveFileW, 2)
 {
-    const char *p = gstr(ARG(0));
+    char a[1024], b[1024];
+    return move_file(gwstr(ARG(0), a, sizeof a), gwstr(ARG(1), b, sizeof b));
+}
+
+static int set_cwd(const char *p)
+{
     char host[2048];
     int exists = path_to_host(p, host, sizeof host, 0);
-    LOG(LOG_FILE, "SetCurrentDirectoryA(\"%s\") -> %d", p, exists);
+    LOG(LOG_FILE, "SetCurrentDirectory(\"%s\") -> %d", p, exists);
     if (!exists) { set_last_error(3); return 0; }
     pthread_mutex_lock(&flock_);
     if (p[0] && p[1] == ':')
@@ -502,6 +549,8 @@ API(KERNEL32, SetCurrentDirectoryA, 1)
     pthread_mutex_unlock(&flock_);
     return 1;
 }
+API(KERNEL32, SetCurrentDirectoryA, 1) { return set_cwd(gstr(ARG(0))); }
+API(KERNEL32, SetCurrentDirectoryW, 1) { char b[1024]; return set_cwd(gwstr(ARG(0), b, sizeof b)); }
 
 API(KERNEL32, GetTempFileNameA, 4)
 {
@@ -538,7 +587,8 @@ static void unix_time_to_filetime(time_t t, uint32_t at)
 
 enum { FROM_USER, FROM_GAME, FROM_XBOX, FROM_MOD };
 
-static int fill_find_data(Find *f, uint32_t data)
+/* WIN32_FIND_DATAA (320 bytes) or, wide, WIN32_FIND_DATAW (592: the names in UTF-16) */
+static int fill_find_data(Find *f, uint32_t data, int wide)
 {
     while (f->pos < f->n) {
         int from = f->from[f->pos];
@@ -550,14 +600,15 @@ static int fill_find_data(Find *f, uint32_t data)
                  from >= FROM_MOD ? f->dir_mod[from - FROM_MOD] : f->dir_game, nm);
         if (stat(p, &st) != 0)
             continue;
-        memset(gptr(data), 0, 320);
+        memset(gptr(data), 0, wide ? 592 : 320);
         W32(data, S_ISDIR(st.st_mode) ? 0x10 : 0x20);
         unix_time_to_filetime(st.st_mtime, data + 4);
         unix_time_to_filetime(st.st_atime, data + 12);
         unix_time_to_filetime(st.st_mtime, data + 20);
         W32(data + 28, (uint32_t)((uint64_t)st.st_size >> 32));
         W32(data + 32, (uint32_t)st.st_size);
-        gstrncpy(data + 44, nm, 260);
+        if (wide) gwput(data + 44, nm, 260);
+        else gstrncpy(data + 44, nm, 260);
         return 1;
     }
     return 0;
@@ -607,9 +658,8 @@ static void sort_names(Find *f)
     memcpy(f->from, from, (size_t)f->n);
 }
 
-API(KERNEL32, FindFirstFileA, 2)
+static uint32_t find_first(const char *spec, uint32_t data, int wide)
 {
-    const char *spec = gstr(ARG(0));
     char dirpart[600], pat[260];
     const char *slash = strrchr(spec, '\\');
     if (!slash) slash = strrchr(spec, '/');
@@ -642,8 +692,8 @@ API(KERNEL32, FindFirstFileA, 2)
     }
     add_matches(f, f->dir_game, pat, FROM_GAME);
     sort_names(f);
-    LOG(LOG_FILE, "FindFirstFileA(\"%s\") -> %d matches", spec, f->n);
-    if (!fill_find_data(f, ARG(1))) {
+    LOG(LOG_FILE, "FindFirstFile(\"%s\") -> %d matches", spec, f->n);
+    if (!fill_find_data(f, data, wide)) {
         free(f);
         set_last_error(2);
         return 0xffffffffu;
@@ -651,15 +701,21 @@ API(KERNEL32, FindFirstFileA, 2)
     return handle_new(H_FIND, f);
 }
 
-API(KERNEL32, FindNextFileA, 2)
+API(KERNEL32, FindFirstFileA, 2) { return find_first(gstr(ARG(0)), ARG(1), 0); }
+API(KERNEL32, FindFirstFileW, 2) { char b[1024]; return find_first(gwstr(ARG(0), b, sizeof b), ARG(1), 1); }
+
+static int find_next(uint32_t h, uint32_t data, int wide)
 {
-    Find *f = handle_get(ARG(0), H_FIND);
-    if (!f || !fill_find_data(f, ARG(1))) {
+    Find *f = handle_get(h, H_FIND);
+    if (!f || !fill_find_data(f, data, wide)) {
         set_last_error(18);                     /* ERROR_NO_MORE_FILES */
         return 0;
     }
     return 1;
 }
+
+API(KERNEL32, FindNextFileA, 2) { return find_next(ARG(0), ARG(1), 0); }
+API(KERNEL32, FindNextFileW, 2) { return find_next(ARG(0), ARG(1), 1); }
 
 API(KERNEL32, FindClose, 1)
 {
@@ -829,16 +885,22 @@ API(KERNEL32, GetFileInformationByHandle, 2)
     return 1;
 }
 
-API(KERNEL32, CopyFileA, 3)
+static int copy_file_to(const char *src, const char *dst, int fail_if_exists)
 {
     char from[2048], to[2048];
-    if (!path_to_host(gstr(ARG(0)), from, sizeof from, 0)) { set_last_error(2); return 0; }
-    int exists = path_to_host(gstr(ARG(1)), to, sizeof to, 1);
+    if (!path_to_host(src, from, sizeof from, 0)) { set_last_error(2); return 0; }
+    int exists = path_to_host(dst, to, sizeof to, 1);
     struct stat st;
-    if (ARG(2) && exists && stat(to, &st) == 0) { set_last_error(80); return 0; }
+    if (fail_if_exists && exists && stat(to, &st) == 0) { set_last_error(80); return 0; }
     int ok = copy_file(from, to);
-    LOG(LOG_FILE, "CopyFileA(\"%s\", \"%s\") -> %d", gstr(ARG(0)), gstr(ARG(1)), ok);
+    LOG(LOG_FILE, "CopyFile(\"%s\", \"%s\") -> %d", src, dst, ok);
     return ok;
+}
+API(KERNEL32, CopyFileA, 3) { return copy_file_to(gstr(ARG(0)), gstr(ARG(1)), ARG(2) != 0); }
+API(KERNEL32, CopyFileW, 3)
+{
+    char a[1024], b[1024];
+    return copy_file_to(gwstr(ARG(0), a, sizeof a), gwstr(ARG(1), b, sizeof b), ARG(2) != 0);
 }
 
 API(KERNEL32, LockFile, 5) { return 1; }
@@ -847,6 +909,7 @@ API(KERNEL32, UnlockFile, 5) { return 1; }
 API(KERNEL32, GetDriveTypeA, 1) { return 3; }              /* DRIVE_FIXED */
 API(KERNEL32, GetDriveTypeW, 1) { return 3; }
 API(KERNEL32, GetLogicalDrives, 0) { return 1u << 2; }      /* C: */
+API_CDECL(MSVCRT, _getdrives) { return 1u << 2; }
 
 API(KERNEL32, GetDiskFreeSpaceA, 5)
 {
@@ -867,7 +930,7 @@ API(KERNEL32, GetDiskFreeSpaceExA, 4)
 
 API(KERNEL32, GetVolumeInformationA, 8)
 {
-    if (ARG(1) && ARG(2)) gstrncpy(ARG(1), "LARUSH", ARG(2));
+    if (ARG(1) && ARG(2)) gstrncpy(ARG(1), "STRANGLEHOLD", ARG(2));
     if (ARG(3)) W32(ARG(3), 0x1234abcdu);
     if (ARG(4)) W32(ARG(4), 255);
     if (ARG(5)) W32(ARG(5), 0x3);
@@ -886,6 +949,7 @@ API(KERNEL32, GetTempPathA, 2)
 
 API(KERNEL32, GetWindowsDirectoryA, 2) { gstrncpy(ARG(0), "C:\\WINDOWS", ARG(1)); return 10; }
 API(KERNEL32, GetSystemDirectoryA, 2) { gstrncpy(ARG(0), "C:\\WINDOWS\\system32", ARG(1)); return 19; }
+API(KERNEL32, GetSystemDirectoryW, 2) { gwput(ARG(0), "C:\\WINDOWS\\system32", ARG(1)); return 19; }
 
 API(KERNEL32, GetShortPathNameA, 3)
 {
@@ -893,6 +957,31 @@ API(KERNEL32, GetShortPathNameA, 3)
     uint32_t len = strlen(s);
     if (len + 1 <= ARG(2)) gstrncpy(ARG(1), s, ARG(2));
     return len + 1 <= ARG(2) ? len : len + 1;
+}
+
+/* names are kept as given (no 8.3 names exist) */
+API(KERNEL32, GetLongPathNameW, 3)
+{
+    char s[1024];
+    gwstr(ARG(0), s, sizeof s);
+    uint32_t len = strlen(s);
+    if (len + 1 <= ARG(2)) gwput(ARG(1), s, ARG(2));
+    return len + 1 <= ARG(2) ? len : len + 1;
+}
+
+/* every missing folder of a path (SHCreateDirectoryEx, SHGetFolderPath's CSIDL_FLAG_CREATE):
+   0, or ERROR_ALREADY_EXISTS / ERROR_PATH_NOT_FOUND */
+uint32_t create_dir_tree(const char *win)
+{
+    char host[2048];
+    struct stat st;
+    if (path_to_host(win, host, sizeof host, 0) && stat(host, &st) == 0)
+        return S_ISDIR(st.st_mode) ? 183 : 80;
+    path_to_host(win, host, sizeof host, 1);
+    mkdirs_for(host);
+    int ok = mkdir(host, 0755) == 0 || errno == EEXIST;
+    LOG(LOG_FILE, "create folders \"%s\" -> %d", win, ok);
+    return ok ? 0 : 3;
 }
 
 API(KERNEL32, SearchPathA, 6) { set_last_error(2); return 0; }

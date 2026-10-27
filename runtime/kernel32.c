@@ -164,13 +164,19 @@ static const char *sysdll_name(uint32_t h)
     return NULL;
 }
 
-API(KERNEL32, GetModuleHandleA, 1)
+static uint32_t get_module_handle(const char *n)
 {
-    const char *n = gstr(ARG(0));
     uint32_t r = module_handle(n);
-    LOG(LOG_API, "GetModuleHandleA(%s) -> %x", n ? n : "NULL", r);
+    LOG(LOG_API, "GetModuleHandle(%s) -> %x", n ? n : "NULL", r);
     if (!r) set_last_error(126);
     return r;
+}
+
+API(KERNEL32, GetModuleHandleA, 1) { return get_module_handle(gstr(ARG(0))); }
+API(KERNEL32, GetModuleHandleW, 1)
+{
+    char b[600];
+    return get_module_handle(ARG(0) ? gwstr(ARG(0), b, sizeof b) : NULL);
 }
 
 static void module_path(uint32_t h, char *b, size_t n)
@@ -218,16 +224,22 @@ API(KERNEL32, TerminateProcess, 2)
     return 0;
 }
 
-API(KERNEL32, GetComputerNameA, 2)
+const char *computer_name(void) { return "PLAYER-PC"; }    /* (also Winsock's gethostname) */
+
+static int get_computer_name(uint32_t buf, uint32_t sizep, int wide)
 {
-    const char *name = "INSANE";
-    uint32_t cap = R32(ARG(1));
+    const char *name = computer_name();
+    uint32_t cap = R32(sizep);
     uint32_t n = strlen(name);
-    if (cap <= n) { W32(ARG(1), n + 1); set_last_error(111); return 0; }
-    gstrncpy(ARG(0), name, cap);
-    W32(ARG(1), n);
+    if (cap <= n) { W32(sizep, n + 1); set_last_error(111); return 0; }
+    if (wide) gwput(buf, name, cap);
+    else gstrncpy(buf, name, cap);
+    W32(sizep, n);
     return 1;
 }
+
+API(KERNEL32, GetComputerNameA, 2) { return get_computer_name(ARG(0), ARG(1), 0); }
+API(KERNEL32, GetComputerNameW, 2) { return get_computer_name(ARG(0), ARG(1), 1); }
 
 API(KERNEL32, OutputDebugStringA, 1)
 {
@@ -235,17 +247,34 @@ API(KERNEL32, OutputDebugStringA, 1)
     return 0;
 }
 
+API(KERNEL32, OutputDebugStringW, 1)
+{
+    char b[2048];
+    LOG(LOG_ALWAYS, "debug output: %s", gwstr(ARG(0), b, sizeof b));
+    return 0;
+}
+
+API(KERNEL32, IsDebuggerPresent, 0) { return 0; }
+API(KERNEL32, FlushInstructionCache, 3) { return 1; }  /* (no code is generated at run time) */
+
 /* ------------------------------------------------------------------ libraries */
 #include <dlfcn.h>
 
-API(KERNEL32, LoadLibraryA, 1)
+static uint32_t load_library(const char *n)
 {
-    const char *n = gstr(ARG(0));
     uint32_t r = n ? module_handle(n) : 0;
-    LOG(LOG_ALWAYS, "LoadLibraryA(\"%s\") -> %x", n, r);
+    LOG(LOG_ALWAYS, "LoadLibrary(\"%s\") -> %x", n ? n : "(null)", r);
     if (!r)
         set_last_error(126);              /* ERROR_MOD_NOT_FOUND */
     return r;
+}
+
+API(KERNEL32, LoadLibraryA, 1) { return load_library(gstr(ARG(0))); }
+API(KERNEL32, LoadLibraryExA, 3) { return load_library(gstr(ARG(0))); }   /* (flags make no difference) */
+API(KERNEL32, LoadLibraryW, 1)
+{
+    char b[600];
+    return load_library(ARG(0) ? gwstr(ARG(0), b, sizeof b) : NULL);
 }
 
 API(KERNEL32, FreeLibrary, 1) { return 1; }
@@ -578,6 +607,14 @@ API(KERNEL32, UnhandledExceptionFilter, 1) { return 0; }
 API(KERNEL32, RaiseException, 4)
 {
     uint32_t code = ARG(0);
+    if (code == 0x406d1388u) {
+        /* MSVC's "set thread name" for a debugger (args: type 0x1000, name, thread id, flags): the
+           program catches it itself when no debugger takes it, so it simply continues */
+        uint32_t info = ARG(3);
+        if (ARG(2) >= 3 && R32(info) == 0x1000 && R32(info + 4))
+            LOG(LOG_THREAD, "thread %x named \"%s\"", R32(info + 8), gstr(R32(info + 4)));
+        return 0;
+    }
     if (code == 0xe06d7363u && ARG(2) >= 3) {
         /* C++ throw: args = magic, object, ThrowInfo -> CatchableTypeArray -> type name */
         uint32_t args = ARG(3), ti = R32(args + 8);
