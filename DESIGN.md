@@ -280,3 +280,10 @@ Findings (2026-10-26):
   unshown window. make install -> ~/.local/opt/stranglehold-native + applications-menu entry
   "Stranglehold" (started with no arguments it plays, user folder ~/.local/share/stranglehold-native
   with the controller data from make pad-data).
+- 2026-10-26 (Ant's first play): AUDIO - FMOD Ex looks up DirectSoundEnumerateA,
+  DirectSoundCaptureEnumerateA and DirectSoundCaptureCreate8 by GetProcAddress and played nothing
+  without them (both DirectSound objects in the log were Bink's; a WAV of the run was silent after
+  the intro). Added (dsound.c): enumeration of the primary driver + one device, no capture devices
+  [verified: SHOLD_SOUND_WAV, title and menu music from ~50 s]. STICKS: the 360's sense is Y DOWN
+  positive (the menu config moves down on LeftY > 0.5; PC keyboard Desire_MoveY = S - W); the
+  bridge had up positive (Ant: menu stick upside down) - fixed for both sticks.

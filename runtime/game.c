@@ -347,7 +347,7 @@ void frame_rate_reapply(void) {}
    data and count [verified: the window procedure 0x8f5100 looks its viewport up there]; the
    client at viewport +0x38, the FViewport at viewport +4) - InputKey (vtable +0x24: viewport,
    controller id, key, event 0 pressed / 1 released, amount) for buttons, InputAxis (+0x28:
-   viewport, controller id, key, delta, delta time) for the sticks every tick [verified: the
+   viewport, controller id, key, delta, delta time) for the sticks every tick (down positive) [verified: the
    keyboard's release sweep 0x8f50a8 and the mouse 0x8f4d99 call them so]. The keyboard is
    controller -3 and the mouse -1 there; a pad is controller 0 [guess: the 360's player 1]. */
 #include <math.h>
@@ -454,11 +454,13 @@ static void pad_tick(CPU *c)
             send_key(c, vp, k, is[k]);
             was[k] = is[k];
         }
-    /* the sticks every tick, as the 360's viewport did: -1 .. 1, up and right positive */
+    /* the sticks every tick, as the 360's viewport did: -1 .. 1, right and DOWN positive (SDL's
+       own sense) [verified: the 360 menu config moves down on LeftY > 0.5, and the PC's keyboard
+       movement is Desire_MoveY = S - W, forward negative; up positive had the menus upside down] */
     send_axis(c, vp, K_LX, a[PAD_LX] / 32768.0f, (float)dt);
-    send_axis(c, vp, K_LY, -a[PAD_LY] / 32768.0f, (float)dt);
+    send_axis(c, vp, K_LY, a[PAD_LY] / 32768.0f, (float)dt);
     send_axis(c, vp, K_RX, a[PAD_RX] / 32768.0f, (float)dt);
-    send_axis(c, vp, K_RY, -a[PAD_RY] / 32768.0f, (float)dt);
+    send_axis(c, vp, K_RY, a[PAD_RY] / 32768.0f, (float)dt);
     had_pad = have;
 }
 

@@ -1862,6 +1862,50 @@ API(DSOUND, 11, 3)
     return DS_OK;
 }
 
+/* Device enumeration, looked up by name (FMOD Ex finds DirectSoundEnumerateA,
+   DirectSoundCaptureEnumerateA and DirectSoundCaptureCreate8 with GetProcAddress, and without them
+   gives up on DirectSound and plays nothing [verified: run log, only Bink's buffers, a silent WAV
+   after the intro]). Playback: the primary driver (NULL GUID) and one device; capture: none. */
+static uint32_t enum_str(const char *s)
+{
+    uint32_t n = (uint32_t)strlen(s) + 1, g = galloc(n);
+    memcpy(gptr(g), s, n);
+    return g;
+}
+
+static uint32_t enum_wstr(const char *s)
+{
+    uint32_t n = (uint32_t)strlen(s) + 1, g = galloc(2 * n);
+    for (uint32_t i = 0; i < n; i++) W16(g + 2 * i, (uint8_t)s[i]);
+    return g;
+}
+
+static uint32_t enum_devices(CPU *c, int wide)
+{
+    uint32_t cb = ARG(0), ctx = ARG(1);
+    static uint32_t guid;
+    if (!cb)
+        return DSERR_INVALIDPARAM;
+    if (!guid) {                            /* {4c696e75-7853-6f75-6e64-000000000001}: ours */
+        static const uint8_t g[16] = {0x75, 0x6e, 0x69, 0x4c, 0x53, 0x78, 0x75, 0x6f, 0x6e, 0x64,
+                                      0, 0, 0, 0, 0, 1};
+        guid = galloc(16);
+        memcpy(gptr(guid), g, 16);
+    }
+    uint32_t (*str)(const char *) = wide ? enum_wstr : enum_str;
+    LOG(LOG_SOUND, "DirectSoundEnumerate%c: the primary driver and one device", wide ? 'W' : 'A');
+    if (guest_call(c, cb, 4, 0u, str("Primary Sound Driver"), str(""), ctx))
+        guest_call(c, cb, 4, guid, str("Speakers"), str("dsound.dll"), ctx);
+    return DS_OK;
+}
+
+API(DSOUND, DirectSoundEnumerateA, 2) { return enum_devices(c, 0); }
+API(DSOUND, DirectSoundEnumerateW, 2) { return enum_devices(c, 1); }
+API(DSOUND, DirectSoundCaptureEnumerateA, 2) { LOG(LOG_SOUND, "DirectSoundCaptureEnumerateA: no capture devices"); return DS_OK; }
+API(DSOUND, DirectSoundCaptureEnumerateW, 2) { LOG(LOG_SOUND, "DirectSoundCaptureEnumerateW: no capture devices"); return DS_OK; }
+API(DSOUND, DirectSoundCaptureCreate, 3) { if (ARG(1)) W32(ARG(1), 0); return 0x88780078u; }   /* DSERR_NODRIVER */
+API(DSOUND, DirectSoundCaptureCreate8, 3) { if (ARG(1)) W32(ARG(1), 0); return 0x88780078u; }
+
 uint32_t dsound_cocreate(uint32_t clsid, uint32_t riid, uint32_t ppv)
 {
     char g[48];
