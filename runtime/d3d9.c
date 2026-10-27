@@ -366,7 +366,7 @@ HOSTFN(sp_IDirect3DDevice9_GetCreationParameters, 2)
     return r;
 }
 
-/* LARUSH_SHOT="frame,frame,...": the back buffer of those presented frames saved as
+/* SHOLD_SHOT="frame,frame,...": the back buffer of those presented frames saved as
    shot_<frame>.png in the user folder (checking the picture without capturing the desktop) */
 #include <zlib.h>
 static void png_chunk(FILE *f, const char *type, const uint8_t *d, uint32_t n)
@@ -386,7 +386,7 @@ static void shot_maybe(void *dev)
     static int nwant;
     if (!parsed) {
         parsed = 1;
-        const char *e = getenv("LARUSH_SHOT");
+        const char *e = getenv("SHOLD_SHOT");
         for (const char *p = e; p && *p && nwant < 1024; ) {
             want[nwant++] = strtoul(p, (char **)&p, 10);
             while (*p == ',' || *p == ' ') p++;
@@ -605,7 +605,7 @@ static void rect_unlock_copy(void *self, uint32_t sub)
         LOG(LOG_ALWAYS, "unlock of %p (%u) that was not locked", self, sub);
         return;
     }
-    if (getenv("LARUSH_LOG_LOCKS")) {
+    if (getenv("SHOLD_LOG_LOCKS")) {
         static int n;
         if (k->bytes >= 262144 && n++ < 40) {
             uint32_t nz = 0;

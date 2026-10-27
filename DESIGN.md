@@ -59,7 +59,21 @@ key FName (2 dwords), delta, delta time) [guess: names from UE3 of the time]; +0
 InputKey. Nothing in the exe reads the XboxTypeS FNames by address, so a pad's keys would be
 sent the same way from the runtime. Open: which controller id the local player's PlayerInput
 answers to (mouse uses -1).
-The Xbox 360 version (Ant's copy, if he dumps it) is the reference to check parity against:
+Xbox 360 disc (Ant's ISO, unpacked 2026-10-26 with extract-xiso to
+~/.local/share/stranglehold-native/xbox360: default.xex, CookedXenon/ in level folders, Config/Xenon,
+Localization/Xenon) [verified]. tools/coalesced.py unpacks a Coalesced file (count = strings, a name
+and a text per file; lengths little- or big-endian). The final input ini differs where it matters
+[verified: work/ini_pc vs work/ini_360, PC-/Xe-StrangleholdInput.ini]: MwyInput's
+InitialControlConfigs is PCControllerConfigs.PCConfig on PC, ControllerConfigs.XBoxConfig on 360,
+which also lists XBoxConfigAlt1-3 (the selectable layouts) and XBoxConfig_GamersDay07; the rest of
+the list (UIStartButton0-3, UISelectButton0-3, ScreenEngineConfig0-3, CinemaCamera, CommonActions,
+FreeCamera, GuitarCase, MoviePlayer, HelicopterTurret, MexicanStandoff) has the same names under
+each package. The PC's Startup_eng package holds both packages' objects: ControllerConfigs with
+XBoxConfig, XBoxConfigAlt1-3, XBoxConfigX06, XBoxConfig_GamersDay07 beside PCControllerConfigs/PCConfig
+[verified: tools/upkdecomp.py (LZO1X blocks through the system liblzo2), names in the decompressed
+package]. So pad parity = select ControllerConfigs.* while a pad is in use; still to check that
+the PC copies of those objects equal the 360's (360 packages are XMem LZX-compressed; the system libmspack does not export its LZX decoder, so that needs our own decoder; open, not urgent: PC cooked Sep 2007 from the same code, 360 May-Jul 2007 [verified: the ini timestamp lists]).
+The Xbox 360 version (Ant's copy) is the reference to check parity against:
 its Coalesced ini and MwyInput packages, and its executable through REA for any console-only
 code the PC build left out.
 
@@ -94,3 +108,10 @@ disassembly of 0x401ae2-0x401b93]. SetUnrealCallbacks is a no-op. Imported wx va
   980 packages, creates the DirectInput mouse and the D3D9 device on DXVK. Harmless: "Failed to
   bind to port 9989 for listening for propagation messages" (no network). Stopped at 0xb89650
   (a function discovery missed: builds/gog.py EXTRA_ENTRIES says why).
+- 2026-10-26: FIRST SCREEN. With 0xb89650 added the engine runs 90 s without a fault (2717 frames
+  headless), and a hidden-window run (--hidden, SHOLD_SHOT=frames) saves "Midway Presents" at
+  frame 1500 (1024x768, X8R8G8B8, presented from the render thread, thread 6) [verified: the PNG].
+  Earlier frames are black (the fade-in). Two D3DXCompileShader(main, ps_2_0) calls at start-up
+  are refused (the shader cache missed two shaders: which ones is open). The Double Fusion
+  module's own Engine.Log (user folder drive_c/.../Midway/Stranglehold) shows it found no network
+  (WSA 10050) [verified]. Shipping UE3 writes no Launch.log.
