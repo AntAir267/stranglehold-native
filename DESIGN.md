@@ -218,3 +218,9 @@ Findings (2026-10-26):
   (dropped on release) [verified: the market intro plays clean, shot_1200]. Test aid: a user folder
   whose Coalesced.ini starts at Map=market_global_persistent (work/testplay) reaches the first
   level's intro in ~10 s instead of ~3 min of title movies.
+- 2026-10-26: PAD IN GAMEPLAY [verified: shots in the market level, work/testplay]: Start/A skip
+  the intro cutscene, A dismisses the tutorial box, the left stick walks, the right trigger fires
+  (ammo 48 -> 41), the right stick turns the camera once UStrangleholdEngineInfo's "PC controls?"
+  slot (vtable 0xdb85c4 +0xf0) answers from the device used last (game.c engine_is_pc): with the
+  fixed PC answer the camera only took the mouse's absolute orbit. Still PC: the tutorial text's
+  prompts ("Press SPACEBAR"), Auto Aim off, no rumble, layout always the default.

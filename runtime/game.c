@@ -2,9 +2,30 @@
 #include <stdlib.h>
 #include <string.h>
 #include "runtime.h"
+#include "pad.h"
+
+/* ------------------------------------------------------------------ PC or console behaviour
+   UStrangleholdEngineInfo's vtable slot +0xf0 (vtable 0xdb85c4, the object at [0x1066700]) answers
+   "PC controls?" with the shared return-1 stub 0x567a30 [verified: runtime read of the slot;
+   0x567a30 is mov eax,1/ret, pointed at 5001 times, so only this slot is changed]. Six places ask
+   it [verified: disassembly]: the camera picks the stick's rate orbit (vtable +0x14c) or the
+   mouse's absolute orbit (+0x150) by it (0x5d7a3a, 0x5e359e), the cinema camera picks the PC or
+   the Xbox CinemaCameraConfig (0x5dab63), and 0x5e0d6c, 0x5e0efc, 0x6d52cc. It now answers from
+   the device used last: console (0) while a controller is in use, PC (1) with keyboard and mouse.
+   With the PC answer the right stick did not turn the camera [verified: a run]. */
+#define ENGINEINFO_PC_SLOT (0xdb85c4u + 0xf0u)
+static void engine_is_pc(CPU *c)
+{
+    c->eax = !input_controller_last();
+    api_return(c, c->eax, 0);
+}
 
 void game_init(void)
 {
+    if (R32(ENGINEINFO_PC_SLOT) == 0x567a30u)
+        W32(ENGINEINFO_PC_SLOT, thunk_addr(engine_is_pc, "UStrangleholdEngineInfo::IsPC (runtime)"));
+    else
+        LOG(LOG_ALWAYS, "engine info: slot +0xf0 is not the expected stub; left alone");
 }
 
 void game_frame(unsigned long frame)
