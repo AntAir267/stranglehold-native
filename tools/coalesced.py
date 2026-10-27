@@ -1,7 +1,9 @@
 """Unpack an Unreal Engine 3 Coalesced.ini / Coalesced.<lang> (PC little-endian or Xbox 360
-big-endian lengths) into a folder of the .ini files it holds.
+big-endian lengths) into a folder of the .ini files it holds, or pack one back.
 
     coalesced.py <Coalesced file> <output folder>
+    coalesced.py --pack <original Coalesced file> <folder> <output file>
+        (the original's file order and names; each file's text from the folder)
 """
 import os
 import struct
@@ -30,7 +32,26 @@ def read(path):
     return out
 
 
+def pack(entries, end='<'):
+    """entries: [(name, text)] -> bytes (8-bit strings, NUL-terminated, as the PC's)"""
+    out = [struct.pack(end + 'I', 2 * len(entries))]
+    for name, text in entries:
+        for t in (name, text):
+            b = t.encode('latin-1') + b'\0'
+            out.append(struct.pack(end + 'i', len(b)) + b)
+    return b''.join(out)
+
+
 def main():
+    if sys.argv[1] == '--pack':
+        orig, folder, dst = sys.argv[2:5]
+        entries = []
+        for name, text in read(orig):
+            base = name.replace('\\', '/').split('/')[-1]
+            with open(os.path.join(folder, base), newline='') as fh:
+                entries.append((name, fh.read()))
+        open(dst, 'wb').write(pack(entries))
+        return
     src, dst = sys.argv[1:3]
     os.makedirs(dst, exist_ok=True)
     for name, text in read(src):

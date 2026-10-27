@@ -28,7 +28,15 @@ RT_OBJ = $(patsubst runtime/%.c,build/obj/rt_%.o,$(filter runtime/%,$(RT_SRC))) 
 GEN_SRC = $(GEN_CODE) gen/table.c gen/stubs.c
 GEN_OBJ = $(patsubst gen/%.c,build/obj/gen_%.o,$(GEN_SRC))
 
-all: build/stranglehold build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0
+all: build/stranglehold build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0 pad-data
+
+# Controller parity (DESIGN.md section 4): the user's Startup packages with each PC control config
+# also including its Xbox 360 twin, made from their own files into the user folder (read first)
+USERDIR ?= $(HOME)/.local/share/stranglehold-native
+PAD_DATA = $(USERDIR)/StrangleholdGame/CookedPC/Startup_eng.xxx.uncompressed_size
+pad-data: $(PAD_DATA)
+$(PAD_DATA): tools/upkpatch.py tools/upkparse.py tools/upkdecomp.py
+	$(PY) tools/upkpatch.py $(GAME) $(USERDIR)
 
 # (the translator's own scripts: other tools/ changes don't regenerate)
 RECOMP_PY = $(wildcard $(addprefix tools/,recomp.py codegen.py discover.py image.py pe.py fpustack.py simd.py x86.py))
@@ -109,4 +117,4 @@ build/obj:
 clean:
 	rm -rf build
 
-.PHONY: all clean install FORCE
+.PHONY: all clean install FORCE pad-data

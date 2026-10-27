@@ -125,6 +125,7 @@ class Package:
             ex.name = self.fname(r)
             ex.archetype = r.i32()
             ex.object_flags = r.u64()
+            ex.size_pos = r.p                       # (where size and offset sit: upkpatch.py rewrites them)
             ex.size = r.i32()
             ex.offset = r.i32()
             ncomp = r.i32()

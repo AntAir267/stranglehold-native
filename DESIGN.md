@@ -181,3 +181,31 @@ Findings (2026-10-26):
   window, 30 headless, while the engine ticks 40/s: the hidden window's presentation is held back
   by the compositor, not the game [guess: check in a visible window]. --test (deterministic
   turns) deadlocks with UE3's threads: real-time --hidden runs are used instead.
+- 2026-10-26: CONTROLLER (core). runtime/pad.c rewritten for this game (state only: SDL gamepads,
+  SHOLD_PAD's scripted pad, no dead zone - the configs apply their own); game.c pad_tick, before
+  each engine tick on the game thread, sends button changes to the first viewport's client as
+  InputKey (controller 0, the XboxTypeS FName globals 0x10ae4e8 on) and the four stick axes as
+  InputAxis every tick (Y negated: up positive), triggers as buttons past XInput's 30/255.
+  Findings [verified: disassembly + runs]: the client's InputKey (0x661f70) also feeds the
+  keyboard (-3) and mouse (-1) straight to the screen engine, then the base (0x4d5b60) gives every
+  key to the MwyInput handler (0x4f41b0, queued with its controller id) and to the engine; the
+  game finds control configs by SHORT NAME, first loaded wins (the exe pushes "PCConfig" at
+  0x6a7240, "UIStartButton%d"/"UISelectButton%d"/"ScreenEngineConfig%d" at 0x6a62c0 on), and an
+  object's Includes resolve by short name too. UStrangleholdEngineInfo's vtable +0xf0 returns 1
+  (a hard "PC" answer; 0x5dab63 picks PC vs Xbox CinemaCameraConfig by it) - not changed.
+  Tried and dropped: the 360's MwyInputHandler list in a Coalesced copy (the loader crashes at
+  0x4a31d0 without the PC entries); the union with the Xbox entries first (pad works, keyboard
+  no longer passes the title); Xbox twins in Includes under their own names (resolved back to the
+  PC objects: no effect).
+  Done: tools/upkpatch.py writes the user's Startup_<lang> packages into the user folder with
+  the 360 twins renamed (name number 100, "UI0_99") and included by the PC configs: PCConfig +
+  Movement, Targeting, XBoxActions, VehicleActions; UIStartButton0-3, UISelectButton0-3, UI0-3,
+  CinemaCamera, MoviePlayer, FreeCamera, GuitarCase, HelicopterTurret, MexicanStandoff each + its
+  twin. Changed objects are appended, only their export entries rewritten, then LZO1X-1 repacked
+  (make pad-data, part of make all; USERDIR = ~/.local/share/stranglehold-native). Result
+  [verified: shots]: the pad's Start opens the main menu, its D-pad moves the highlight, and the
+  keyboard still works beside it (Enter on the title, Down in the menu).
+  Next: gameplay with the pad (sticks, triggers, aim), Xbox prompts while a pad is in use
+  (WooControllerTokenManager ButtonMappings), Auto Aim 2 as the pad default, the layout choice
+  (XBoxConfigAlt1-3; the profile load always loads PCConfig), rumble.
+
