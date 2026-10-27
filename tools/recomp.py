@@ -61,6 +61,15 @@ def main():
         if sha != want:
             sys.exit('%s is not the file the %s build describes (sha256 %s)' % (path, cfg.NAME, sha))
         mods.append(Module(name, path))
+    # byte changes to the code before translation (builds/*.py CODE_PATCHES: va -> (original hex,
+    # new hex)); the original bytes are checked so a patch never lands on other code
+    for va, (orig, new) in sorted(getattr(cfg, 'CODE_PATCHES', {}).items()):
+        orig, new = bytes.fromhex(orig.replace(' ', '')), bytes.fromhex(new.replace(' ', ''))
+        m = next(m for m in mods if m.lo <= va < m.hi)
+        o = va - m.pe.base
+        if len(orig) != len(new) or bytes(m.pe.image[o:o + len(orig)]) != orig:
+            sys.exit('code patch at %08x: the original bytes differ' % va)
+        m.pe.image[o:o + len(new)] = new
     pe = Image(mods)
     dec = Decoder(pe)
     iat = {va: (dll, name) for dll, name, va in pe.imports}
