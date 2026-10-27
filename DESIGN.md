@@ -90,6 +90,58 @@ starts wxWidgets. The runtime's wxEntry instead runs the -nowxwindows branch: GE
 disassembly of 0x401ae2-0x401b93]. SetUnrealCallbacks is a no-op. Imported wx variables
 (wxDefaultSize, wxAppConsole::ms_appInitFn) get blocks of program memory (main.c).
 
+### 7. Reading tools (Ant, 2026-10-26: UE Viewer and an UnrealScript decompiler)
+All local to the project, never committed (third_party/ is ignored; only our own scripts and
+tools/uedump's source are in the repository).
+- tools/upkdecomp.py: a fully compressed package (.xxx with .uncompressed_size) to a plain .upk.
+  PC and Xbox 360 blocks are both LZO1X (the system liblzo2 through ctypes); the 360's headers
+  are big-endian, and its 830 level packages are stored uncompressed [verified: all 1491 blocks of
+  the 48 compressed 360 packages decode to their listed sizes]. No LZX anywhere.
+- tools/coalesced.py: a Coalesced.ini / Coalesced.<lang> to its .ini files.
+- tools/upkparse.py: package header, names, imports, exports (both byte orders). Midway adds
+  "WOO " + build + a second number after the header size: PC build 530/35, 360 523/34.
+- UELib (UE Explorer's library, MIT): third_party/UELib, release 1.12.0 (master needs the
+  .NET 10 compiler), built on the .NET 8 SDK 8.0.427 in third_party/dotnet (Microsoft's
+  linux-x64 archive, sha512 checked; no system install) with -p:LangVersion=12
+  -p:TargetFrameworks=net8.0. It knows Stranglehold (package 375/25). tools/uelib.sh runs its
+  CLI ("obj list", "obj decompile <Group.Object>"; give it </dev/null or it waits for more).
+- tools/uedump (ours, C# on UELib; build: third_party/dotnet/dotnet build tools/uedump/uedump.csproj
+  -c Release -p:LangVersion=12 -p:TargetFrameworks=net8.0, output in work/uedump):
+  tools/uedump.sh <script package folder> <package.upk> <out> <path prefix>... | --classes.
+  It reads every script package first to learn each array property's element type (UELib alone
+  only knows types of classes in the same package), then writes one file per object (properties)
+  or per class (UnrealScript). Script packages decompressed in work/upk_pc, work/upk_360.
+- UE Viewer (umodel), official Linux build of 2022-01-06 (539 KB, gildor.org) in
+  third_party/umodel: it is 32-bit and needs libpng12.so.0 (i386), which this system lacks, so it
+  does not start yet [verified: ldd]. Not needed for the work so far (UELib covers objects and
+  script); options if wanted later (each needs Ant's yes): build UE Viewer from its source, or a
+  32-bit libpng12 beside it.
+
+Findings (2026-10-26):
+- Controller configs: all 3364 objects of package ControllerConfigs present on both (XBoxConfig,
+  XBoxConfigAlt1-3, Targeting, Movement, XBoxActions, VehicleActions, the UI/screen configs and
+  every MwyInput op under them) decompile to identical text on PC and 360; the PC only adds
+  CinemaCameraConfigPS3Japan (16 objects) [verified: work/ctrl_pc vs work/ctrl_360].
+  XBoxConfig = Includes CommonMacros, KeyboardActions, Movement, Targeting, XBoxActions,
+  KeyboardMovement, CommonActions, DevelopmentActions, VehicleActions.
+- Scripts: 2145 classes decompiled per version (work/script_pc, work/script_360); 76 differ
+  (work/script_diff_sizes.txt), mostly defaults. Control-related differences, all data, no logic:
+  MwyInputHandler (its config lists: PCControllerConfigs.* vs ControllerConfigs.* as in the ini);
+  WooControllerTokenManager (prompt names PC*ButtonName vs XBox*ButtonName, and the PC's extra
+  %CROUCH%, %MOVEMENT2%, %ENTER% tokens); WooProfileSettings (PC version 27 adds settings 700-722:
+  resolution and key bindings; setting 116 "Auto Aim", levels 0-3, defaults to 0 on PC and 2 on
+  360); WooEngineInfo.ControllerLayouts[10] and [14] (PC pictures 17 and 16, 360 1 and 0);
+  Engine.PlayerInput's keyboard bindings.
+- Pad parity therefore needs [guess until built]: ControllerConfigs.XBoxConfig (or the chosen
+  Alt layout) while a pad is in use, the XBox* prompt names, Auto Aim 2 as the pad default,
+  and XboxTypeS key events from SDL3.
+- Files: the 360 has nothing newer. All 864 packages both versions share are build 530 on PC and
+  523 on 360 [verified: work/woo_builds.py]. Only on 360: 11 Tai O streaming chunks (the PC splits
+  that level differently, 13 of its own), ui_*xenon packages, Xbox360TOC.txt. Only on PC: the ad
+  data, Russian, more level/cinema chunks, the PC UI packages [verified: work/files_only_*.txt].
+- Still to dump: the controller-layout screen (in the ui_* screen packages, not script) and the
+  native aim friction (exe strings: friction multipliers, WooTargetingSystem in script).
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/gog.py; first translator run (74,050
   functions, ~100 s discovery, ~6 GB RAM, ~9-10 min to write 9.2 M lines in 301 files; a full
