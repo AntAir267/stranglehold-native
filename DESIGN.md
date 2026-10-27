@@ -167,3 +167,7 @@ Findings (2026-10-26):
   are refused (the shader cache missed two shaders: which ones is open). The Double Fusion
   module's own Engine.Log (user folder drive_c/.../Midway/Stranglehold) shows it found no network
   (WSA 10050) [verified]. Shipping UE3 writes no Launch.log.
+- 2026-10-26: TITLE SCREEN. A 200 s hidden-window run reaches "JOHN WOO PRESENTS STRANGLEHOLD /
+  Press ENTER" by frame 3600 [verified: work/testuser/shot_3600.png]. ~19 frames a second over the
+  run (3810 frames in 200 s, intro movies included): speed not looked at yet. Next: input into the
+  window (keyboard, then the pad path of section 4), the two missed shaders, frame rate.
