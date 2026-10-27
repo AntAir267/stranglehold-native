@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #define INITGUID
 #include <dlfcn.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -238,11 +239,15 @@ HOSTFN(sp_any_GetPrivateData, 4)
 
 /* ------------------------------------------------------------------ present parameters */
 /* the program's D3DPRESENT_PARAMETERS: 14 dwords, hDeviceWindow at +28 */
+static uint32_t bb_w, bb_h;              /* the back buffer's size (the game's resolution) */
+
 static void pp_in(uint32_t g, D3DPRESENT_PARAMETERS *pp, uint32_t focus)
 {
     memset(pp, 0, sizeof *pp);
     pp->BackBufferWidth = R32(g);
     pp->BackBufferHeight = R32(g + 4);
+    bb_w = pp->BackBufferWidth;
+    bb_h = pp->BackBufferHeight;
     pp->BackBufferFormat = (D3DFORMAT)R32(g + 8);
     pp->BackBufferCount = R32(g + 12);
     pp->MultiSampleType = (D3DMULTISAMPLE_TYPE)R32(g + 16);
@@ -447,12 +452,37 @@ static void shot_maybe(void *dev)
     ((ULONG (*)(void *))VT(bb)[2])(bb);
 }
 
+/* The picture keeps its shape: a back buffer whose shape is not the window's (the game's default
+   1024 x 768 on a 16:10 screen) is shown centred at the window's height or width, the rest black
+   (DXVK clears what the destination rectangle leaves), not stretched (Ant: "the game looks
+   stretched"). At the window's own shape it fills the window as before. */
+static const RECT *present_dest(RECT *r)
+{
+    int ww, wh;
+    host_window_pixels(&ww, &wh);
+    if (ww <= 0 || wh <= 0 || !bb_w || !bb_h)
+        return NULL;
+    double wa = (double)ww / wh, ba = (double)bb_w / bb_h;
+    if (fabs(wa - ba) < 0.01 * ba)
+        return NULL;
+    if (wa > ba) {                          /* the window is wider: bars at the sides */
+        int w = (int)lround(wh * ba);
+        r->left = (ww - w) / 2; r->right = r->left + w; r->top = 0; r->bottom = wh;
+    } else {                                /* taller: bars above and below */
+        int h = (int)lround(ww / ba);
+        r->top = (wh - h) / 2; r->bottom = r->top + h; r->left = 0; r->right = ww;
+    }
+    return r;
+}
+
 HOSTFN(sp_IDirect3DDevice9_Present, 5)
 {
     void *self = d3d_host(ARG(0));
     shot_maybe(self);
+    RECT dr;
+    const RECT *dest = ARG(2) ? (const RECT *)gptr(ARG(2)) : present_dest(&dr);
     uint32_t r = (uint32_t)((HRESULT (*)(void *, const RECT *, const RECT *, HWND, const RGNDATA *))VT(self)[17])(
-        self, (const RECT *)gptr(ARG(1)), (const RECT *)gptr(ARG(2)), NULL, (const RGNDATA *)gptr(ARG(4)));
+        self, (const RECT *)gptr(ARG(1)), dest, NULL, (const RGNDATA *)gptr(ARG(4)));
     frame_presented();
     return r;
 }

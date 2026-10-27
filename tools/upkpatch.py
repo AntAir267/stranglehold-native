@@ -17,6 +17,7 @@ table entry (size, offset) is rewritten, so nothing else moves. Nothing from the
 this repository; the result is made from the user's file on their machine.
 """
 import ctypes
+import hashlib
 import os
 import struct
 import sys
@@ -185,6 +186,54 @@ def patch(u):
     return bytes(out), log
 
 
+def patch_profile_defaults(game, user):
+    """WooEngineInfo: the new profile's Auto Aim (setting 116) at level 2, the 360's default, in
+    place of the PC's 0 (Ant: "default it 2 but make it a setting"); a same-size edit of the
+    DefaultSettings entry's Value1 [verified: one PropertyId=116 entry in Default__WooProfileSettings]"""
+    src = os.path.join(game, 'StrangleholdGame', 'CookedPC', 'WooEngineInfo.xxx')
+    u = bytearray(upkdecomp.decompress(open(src, 'rb').read()))
+    pk = upkparse.Package(bytes(u))
+    N = pk.names
+    i = [k for k in range(len(pk.exports)) if pk.obj_name(k + 1) == 'Default__WooProfileSettings'][0]
+    ex = pk.exports[i]
+    d = pk.export_data(ex)
+    ip = N.index('IntProperty')
+    pat = struct.pack('<iiiiii', N.index('PropertyId'), 0, ip, 0, 4, 0) + struct.pack('<i', 116)
+    k = d.find(pat)
+    j = d.find(struct.pack('<iiiiii', N.index('Value1'), 0, ip, 0, 4, 0), k)
+    assert k >= 0 and j > k and d.count(pat) == 1, 'Auto Aim default not found'
+    struct.pack_into('<i', u, ex.offset + j + 24, 2)
+    dst = os.path.join(user, 'StrangleholdGame', 'CookedPC')
+    os.makedirs(dst, exist_ok=True)
+    open(os.path.join(dst, 'WooEngineInfo.xxx'), 'wb').write(compress_package(bytes(u)))
+    with open(os.path.join(dst, 'WooEngineInfo.xxx.uncompressed_size'), 'w') as fh:
+        fh.write('%d' % len(u))
+    # a script package: the program checks its SHA-1 (uncompressed) and quits on a mismatch; the
+    # runtime puts this hash in the program's table (runtime/game.c package_hashes)
+    with open(os.path.join(dst, 'WooEngineInfo.xxx.sha1'), 'w') as fh:
+        fh.write(hashlib.sha1(bytes(u)).hexdigest() + '\n')
+    print('WooEngineInfo.xxx: Auto Aim defaults to 2')
+
+
+def patch_ui(game, user):
+    """The menus (tools/screenset.py, DESIGN.md section 8): Control Config opens the 360's
+    controller-layout screen while a pad is in use (screen variable 9999, answered by the
+    runtime), the A/B footers the PC hides shown (their Xbox button images drawn while a pad is in
+    use: runtime/game.c), the video screen's Apply footer with the Start button, and the pause
+    menu's Vibration row (hidden on PC: the port has rumble now)."""
+    import subprocess
+    src = os.path.join(game, 'StrangleholdGame', 'CookedPC')
+    dst = os.path.join(user, 'StrangleholdGame', 'CookedPC')
+    os.makedirs(dst, exist_ok=True)
+    tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'screenset.py')
+    for pkg, names in (('ui_shell', ['controlconfig-pad', 'footers-visible', 'video-apply-icon']),
+                       ('ui_ingame', ['pause-vibration'])):
+        subprocess.run([sys.executable, tool, 'patch', os.path.join(src, pkg + '.xxx'),
+                        os.path.join(dst, pkg + '.xxx')] + names, check=True,
+                       stdout=subprocess.DEVNULL)
+        print('%s.xxx: %s' % (pkg, ', '.join(names)))
+
+
 def patch_config(game, user, start_map=None):
     import coalesced
     src = os.path.join(game, 'StrangleholdGame', 'Config', 'PC', 'Cooked', 'Coalesced.ini')
@@ -214,6 +263,8 @@ def main():
     game, user = sys.argv[1:3]
     start_map = sys.argv[sys.argv.index('--map') + 1] if '--map' in sys.argv else None
     patch_config(game, user, start_map)
+    patch_profile_defaults(game, user)
+    patch_ui(game, user)
     src_dir = os.path.join(game, 'StrangleholdGame', 'CookedPC')
     dst_dir = os.path.join(user, 'StrangleholdGame', 'CookedPC')
     os.makedirs(dst_dir, exist_ok=True)

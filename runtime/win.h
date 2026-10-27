@@ -7,6 +7,7 @@ void host_window_show(int visible);
 void host_window_resize(int w, int h);
 void host_window_title(const char *title);
 void host_desktop_size(int *w, int *h);
+void host_window_pixels(int *w, int *h);      /* the window's size now (presentation) */
 void host_pump(void);
 void host_cursor_visible(int visible);
 void host_message_box(const char *caption, const char *text);

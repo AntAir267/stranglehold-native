@@ -35,7 +35,7 @@ all: build/stranglehold build/lib/libSDL3.so.0 build/lib/libdxvk_d3d9.so.0 pad-d
 USERDIR ?= $(HOME)/.local/share/stranglehold-native
 PAD_DATA = $(USERDIR)/StrangleholdGame/CookedPC/Startup_eng.xxx.uncompressed_size
 pad-data: $(PAD_DATA)
-$(PAD_DATA): tools/upkpatch.py tools/upkparse.py tools/upkdecomp.py
+$(PAD_DATA): tools/upkpatch.py tools/upkparse.py tools/upkdecomp.py tools/screenset.py tools/coalesced.py
 	$(PY) tools/upkpatch.py $(GAME) $(USERDIR)
 
 # (the translator's own scripts: other tools/ changes don't regenerate)

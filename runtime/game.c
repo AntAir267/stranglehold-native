@@ -290,10 +290,72 @@ static int hook_localize_fn(CPU *c)
     return 1;
 }
 
+/* 0x659620's crash guard (builds/gog.py): the chain the original reads, and if it is empty only the
+   flag is set (its first part) */
+static int hook_widescreen_flag_fn(CPU *c)
+{
+    uint32_t eng = R32(0x10ae0e8u), obj = 0;
+    uint32_t x = eng ? R32(eng + 0x2d8) : 0;
+    if (x) {
+        uint32_t r = guest_call(c, 0x6419d0u, 1, x);       /* (cdecl getter) */
+        obj = r ? R32(r + 0xe4) : 0;
+    }
+    if (obj)
+        return 0;                           /* (the original: it can notify) */
+    uint32_t self = c->ecx, wide = R32(c->esp + 4) & 0xff;
+    if (R8(self + 0x1b8) != wide) {
+        W8(self + 0x1b8, wide);
+        LOG(LOG_ALWAYS, "widescreen flag %u set without notifying (no game object yet)", wide);
+    }
+    c->ret = R32(c->esp);
+    c->esp += 8;                            /* (ret 4) */
+    return 1;
+}
+
+/* ------------------------------------------------------------------ menus
+   The menus' screen engine (DESIGN.md section 8). The patched Settings menus open the 360's
+   controller-layout screen or the PC's keyboard screen on screen variable 9999, which this hook
+   answers with "a pad is in use" [guess until run: the IfVar path reaches GetVar 0x6a5250]. */
+static int hook_screen_var_fn(CPU *c)
+{
+    if (R32(c->esp + 4) != 9999)
+        return 0;
+    c->eax = input_controller_last() ? 1 : 0;
+    c->ret = R32(c->esp);
+    c->esp += 12;                           /* (ret 8) */
+    return 1;
+}
+
+/* The image drawer 0x6dc770 refuses 13 button images by name (_stricmp against the strings at
+   0xdff75c-0xdff8a0: Generic_Elements-Nav_A/X/B/Y, _HudElements-SB_IconBackingFill,
+   Generic_Elements-Xbox_Back/LA/LB/LT/RA/RB/RT/Start; nothing else uses them) [verified:
+   disassembly]. While a pad is in use their first letters are changed so nothing matches and the
+   menus draw the Xbox buttons; with keyboard and mouse the names are put back. */
+static const uint32_t blocked_images[] = {0xdff75c, 0xdff774, 0xdff78c, 0xdff7a4, 0xdff7c4, 0xdff7dc,
+                                          0xdff7f8, 0xdff814, 0xdff830, 0xdff84c, 0xdff868, 0xdff884,
+                                          0xdff8a0};
+static void images_tick(void)
+{
+    static int shown = -1;
+    int want = input_controller_last() != 0;
+    if (want == shown)
+        return;
+    static uint8_t first[sizeof blocked_images / sizeof *blocked_images];
+    for (size_t i = 0; i < sizeof blocked_images / sizeof *blocked_images; i++) {
+        if (shown < 0)
+            first[i] = (uint8_t)R8(blocked_images[i]);
+        W8(blocked_images[i], want ? 1 : first[i]);
+    }
+    shown = want;
+    LOG(LOG_INPUT, "menus: Xbox button images %s", want ? "shown" : "hidden (PC)");
+}
+
 static int hook_button_name_fn(CPU *c);
 
 void game_init(void)
 {
+    hook_screen_var = hook_screen_var_fn;
+    hook_widescreen_flag = hook_widescreen_flag_fn;
     hook_localize = hook_localize_fn;
     hook_load_profile_config = hook_load_profile_config_fn;
     if (R32(FFM_APPLY_SLOT) == 0x4024a0u)        /* (the empty ret 8) */
@@ -307,9 +369,27 @@ void game_init(void)
         LOG(LOG_ALWAYS, "engine info: slot +0xf0 is not the expected stub; left alone");
 }
 
+/* SHOLD_POSTMSG="frame:msg:wparam,..." (tests, hex msg/wparam): window messages posted as if from
+   the host window at those frames (focus changes, close) */
 void game_frame(unsigned long frame)
 {
-    (void)frame;
+    static char *spec;
+    static int parsed;
+    if (!parsed) { parsed = 1; const char *e = getenv("SHOLD_POSTMSG"); spec = e ? strdup(e) : NULL; }
+    if (!spec) return;
+    for (char *p = spec; p && *p; ) {
+        unsigned long f = strtoul(p, &p, 10);
+        unsigned msg = 0, wp = 0;
+        if (*p == ':') msg = (unsigned)strtoul(p + 1, &p, 16);
+        if (*p == ':') wp = (unsigned)strtoul(p + 1, &p, 16);
+        if (f == frame) {
+            extern void post_message(uint32_t msg, uint32_t wparam, uint32_t lparam);
+            LOG(LOG_ALWAYS, "SHOLD_POSTMSG: frame %lu: message %x (%x)", frame, msg, wp);
+            post_message(msg, wp, 0);
+        }
+        while (*p && *p != ',') p++;
+        if (*p == ',') p++;
+    }
 }
 
 int game_driving(void)
@@ -613,8 +693,42 @@ static uint32_t engine_call(CPU *c, uint32_t fn)
 
 API_CDECL(WXMSW262U, _SetUnrealCallbacks_wxEventLoopBase__SAXPAVwxUnrealCallbacks_1__Z) { return 0; }
 
+/* The program checks its 43 script packages (Core.xxx ... StrangleholdGame.xxx) against SHA-1
+   hashes of their uncompressed data in a resource (entries "..\\StrangleholdGame\\CookedPC\\X.xxx",
+   NUL, 20 hash bytes; at 0x117fbd8-0x11808b0 with the Coalesced files' entries) and the engine
+   quits at start-up when one differs [verified: WooEngineInfo.xxx's entry = SHA-1 of the
+   uncompressed package; a recompressed copy starts, the same copy with one value changed quits
+   before the first tick]. LoadResource hands the game a pointer into the program image (res.c),
+   so a package that tools/upkpatch.py changes gets its new hash from <name>.sha1 beside it in
+   the user folder, written here before the engine starts. */
+static void package_hashes(void)
+{
+    static const char prefix[] = "..\\StrangleholdGame\\CookedPC\\";
+    for (uint32_t a = 0x117fbd8u; a < 0x11808b0u; a++) {
+        if (memcmp(gptr(a), prefix, sizeof prefix - 1))
+            continue;
+        const char *name = (const char *)gptr(a) + sizeof prefix - 1;
+        char path[1024], hex[48] = "";
+        snprintf(path, sizeof path, "%s/StrangleholdGame/CookedPC/%s.sha1", user_dir, name);
+        uint32_t hash = a + (uint32_t)strlen((const char *)gptr(a)) + 1;
+        FILE *f = fopen(path, "r");
+        if (f) {
+            int ok = fscanf(f, "%40s", hex) == 1 && strlen(hex) == 40;
+            fclose(f);
+            for (int i = 0; ok && i < 20; i++) {
+                unsigned v;
+                ok = sscanf(hex + 2 * i, "%2x", &v) == 1;
+                W8(hash + (uint32_t)i, v);
+            }
+            LOG(LOG_ALWAYS, "packages: %s checked against %s%s", name, ok ? "the patched copy's hash " : "?? ", hex);
+        }
+        a = hash + 19;
+    }
+}
+
 API_CDECL(WXMSW262U, _wxEntry__YAHPAUHINSTANCE____0PADH_Z)
 {
+    package_hashes();
     W32(USING_WX, 0);
     uint32_t r = 0;
     if (!R32(REQUESTING_EXIT)) {
@@ -627,6 +741,7 @@ API_CDECL(WXMSW262U, _wxEntry__YAHPAUHINSTANCE____0PADH_Z)
             else {
                 pad_tick(c);
                 prompts_tick(c);
+                images_tick();
                 {
                     static double last;
                     struct timespec ts;

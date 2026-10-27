@@ -64,4 +64,14 @@ HOOKS = {
     # at 0x6bdd4f, 0x6d417b]: the few PC-only strings with keyboard keys written in get the Xbox
     # buttons while a controller is in use (game.c)
     0x6f85c0: 'localize',
+    # (this, bool wide): sets the viewport client's widescreen flag (+0x1b8) and, when it changes,
+    # tells [[[GEngine 0x10ae0e8]+0x2d8] -> 0x6419d0 -> +0xe4]+0x38 (two 0x7fa notifications); with
+    # that chain empty it reads address 0x38 and the game crashed (Ant's session: 20 s after
+    # switching to 2560x1600 in the menus) [verified: disassembly of 0x659620 and the crash
+    # backtrace 0x8f5100 -> 0x663100 -> 0x662380 -> 0x659620]: the hook skips the notification then
+    0x659620: 'widescreen_flag',
+    # the screen engine's GetVar (thiscall: id, x; ret 8) [verified: disassembly, then the engine's
+    # variable store 0x9b6990]: id 9999 (undeclared in the game) answers "a pad is in use" for the
+    # patched Settings menus (tools/screenset.py controlconfig-pad) (game.c)
+    0x6a5250: 'screen_var',
 }

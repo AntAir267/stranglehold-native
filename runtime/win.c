@@ -248,6 +248,14 @@ void host_desktop_size(int *w, int *h)
     *h = desk_h;
 }
 
+/* the window's size in pixels now (0 x 0 without one) */
+void host_window_pixels(int *w, int *h)
+{
+    *w = *h = 0;
+    if (sdl_ok && window)
+        SDL_GetWindowSizeInPixels(window, w, h);
+}
+
 int host_refresh_hz(void)
 {
     if (!sdl_ok)

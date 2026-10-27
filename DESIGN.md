@@ -142,6 +142,104 @@ Findings (2026-10-26):
 - Still to dump: the controller-layout screen (in the ui_* screen packages, not script) and the
   native aim friction (exe strings: friction multipliers, WooTargetingSystem in script).
 
+### 8. Menus: the WooScreenSet format (2026-10-27; Ant: "decode the midway binary screen format!")
+
+Tool: tools/screenset.py (dump / roundtrip / diff / rows / patch). Dumps (JSON + text tree) in
+work/screenset/<package>.json/.txt for PC ui_shell, ui_common, ui_ingame, ui_unlockshop and the
+360's ui_shellxenon, ui_ingamexenon, ui_unlockshopxenon, ui_commonxenon (inside the 360
+Startup_eng). PC-vs-360 structural diffs: work/screenset/diff_{shell,ingame,unlockshop,common}.txt.
+
+Format [verified: the exe's load-time fix-up code 0x9b7dc0 (SSET), 0x9b7ab0 (SDAT), 0x9b7730
+(nodes), 0x9b76e0/0x9b7650 (handlers, arguments), 0x9b79d0/0x9b78d0 (animations); round trip of
+all 8 screen sets byte-identical; every handler entry of every screen reachable through the tree
+model below (0 unreached)]:
+- Export = properties ReferencedTextures (Texture2D list) and RawData (bytes). RawData = SSET:
+  screen names, an offset table, then one SDAT block per screen. All pointers are byte offsets
+  (from SSET resp. SDAT) that the loader turns into addresses; byte order = package order.
+- SDAT: +0xc root node, +0x10 animation table, +0x14 string table (count, offsets). Every name,
+  image, localization key, action string and expression is an index into it.
+- Nodes: tag ('OBJ ', 'GROP', 'POLY', 'TEXT'), name, flags (bit 0 = visible; PC node flags also
+  carry 0x8000). OBJ/GROP (0x20): handler list, transform block (20 floats: scale [3..5],
+  position [6..8], colour [12..15] [guess for the rest]), child list, X block = native widget
+  (4CC + arguments: LIST = option row (list-names var, value var, ..., value TEXT), SLDP = slider,
+  SPSH = the 360 controller-layout picker, TEXT, CNTR). POLY (0x74): 4 vertices, 4 colours,
+  4 UVs, image name. TEXT (0x34): text key, font, size/box, colour, alignment.
+- Handler = one event's script: event id, entry count, top-level count; entries {op, first
+  child, child count, argument list}. If/Else/IfVar run their child range (0x9b3690); an If
+  that ran disables the following Else/ElseIf.
+- Events [verified: signal table 0x6a7577..., 0x9b5a90]: 1006/1007/1008/1009 up/down/left/right,
+  1010 A, 1014 + 1035 B, 1015 X, 1011 Y, 1013 Start, 1012 Back, 1017/1019 LT/RT, 2090/2091
+  LB/RB; 1031 init and 1004/1005 focus in/out [guess from content]. Footer objects carry a
+  "button" event 2102 (B), 2105 (A), 2110 (Start), 2112 (X), 2113 (Y), 2109 (Back), 2114/2115
+  (LB/RB), 2116/2117 (LT/RT): a mouse click on the object is turned into that button's event
+  (table 0x9b5bb8; dispatch 0x9b58f0).
+- Actions: engine ops 1000-1092 (factory 0x9b8ea0, classes from RTTI: 1003 OpenScreen,
+  1002 Visible, 1014 SetFocus, 1039 If / 1040 ElseIf (integer expression), 1035/1036 float If,
+  1065 Else, 1021/1022 anim ...); game ops (FWooScreenClient 0x6aba80, FWooGameVars 0x6d2100):
+  11000 SetVar(var, value), 11001 IfVar(var, cmp 0..5 = == != > >= < <=, value),
+  11017 IfConfigBool(section, key, ini), 3004 Command string ('causeevent ...'), 5002 sound,
+  11045 profile -> vars, 11041 vars -> profile, 11085 revert resolution.
+- Expressions (If args; evaluator 0x9c1c30/0x9c0ce0): first byte 01vsssss = target slot
+  (0 = evaluate only), then operands/operators: 01... slot, 10... operator (EXPR_OPS),
+  11... literal (c0 u8, c1 u16, c2 i32, c3 float, big-endian). Literal payloads may be 0: the
+  cooker stores '@\xc0' 0 as 40 c0 00 00.
+- Screen vars: 0x6a5250 GetVar -> engine store 0x9b6990 (declared id ranges from a 'NAM' blob)
+  or a provider by id range (FWooGameVars, FWooScreenVars). An undeclared id reads 0 and
+  SetVar to it is dropped [verified: 0x9b68b0/0x9b6a40].
+
+Findings:
+- (a) Control Config [verified]: the cooker folded the platform test into literals. In every
+  copy of the Settings menu (m_Settings and the copies in m_AudioSettings, m_controllerSetup,
+  m_MultiplayerSettings) the Control Config accept handler is If(Xbox) -> m_controllerSetup,
+  If(PS3) -> m_controllerSetup, If(PC) -> m_pcKeyboardConfig; PC data has 0,0,1, the 360 1,0,0.
+  Same pattern for Audio (m_AudioSettings / m_pcAudioOptions) and Video. No runtime condition.
+- (b) Button images on PC [verified]: two things hide them. (1) FWooScreenPoly draw (0x6dc770,
+  vtable 0xdff8c4 slot 3) refuses to draw any POLY whose image _stricmp-matches one of 13 names
+  (Generic_Elements-Nav_A/X/B/Y, _HudElements-SB_IconBackingFill, Generic_Elements-Xbox_Back/
+  LA/LB/LT/RA/RB/RT/Start; strings 0xdff75c-0xdff8a0, compares 0x6dc8a3-0x6dc9d8, drawing at
+  0x6dc9da). No platform query: unconditional. (2) The PC data hides the A ("Select") footer
+  objects (flags 2 instead of 3, Nav_A POLY flags 0) in m_chapterSelect, m_MainMenu (also its
+  B footer), m_Settings, m_extras. The footer scripts themselves are platform-neutral:
+  If(PS3) {var 9218 picks PS3 X/O} Else {Nav_A/Nav_B visible}, same on both. The PC-only
+  screens m_pcKeyboardConfig/VideoOptions/AudioOptions have Back (Nav_B), Reset (Nav_Y) and a
+  text-only Apply (2110 = Start). Localized: Module_Accept "Select", module_Back "Back".
+- (c) Video Apply [verified: data; guess: the effect]: footers are not focusable (no
+  1004/1006-1009 handlers; the last row Decals' Down sets focus to itself). Apply is the
+  Start-button alias (event 2110): clicking it = pressing Start = keyboard Enter; the focused
+  row's Start handler runs op 11086, which no C++ switch handles by constant (0x6aba80's table
+  sends it to the shared exit) [guess: settings apply as each LIST changes, through the vars;
+  check in a run: pad Start on m_pcVideoOptions should do what Enter does].
+- (d) Auto Aim [verified]: the in-game pause menu (ui_ingame ig_PauseMenu, both versions) has
+  an options page with rows Invert Up/Down, Invert Left/Right, Vertical/Horizontal Speed, Music,
+  SFX, Gamma, Lookspring, Auto Tequila Time, Aim Assist, Controller Vibration, TV Type, View
+  Tips. Aim Assist = OBJ "Toggle_AimAssist" (0x11edc), LIST(1, #9074 level names, #9144 value):
+  op 11045 copies the profile to vars, 11041 back; var 9144 <-> script GetAutoAim/SetAutoAim
+  (0x563760/0x563d10, FNames at 0x565052/0x565426). On PC the Vibration row is hidden (flags
+  0x8000; 360 3) but still in the up/down chain. The front end has no such rows: the 360's
+  m_controllerSetup holds only the layout picker (SPSH widget, vars #9029/#9093). So Auto Aim is
+  already an in-menu setting (Pause > Options); the default 2 is a profile default (setting 116),
+  not screen data.
+
+Patches (tools/screenset.py patch <pkg> <out> <names>; each re-parses and round-trips). Installed
+by tools/upkpatch.py patch_ui (make pad-data): ui_shell controlconfig-pad, footers-visible,
+video-apply-icon; ui_ingame pause-vibration:
+- controlconfig-always: swap the literals in the 4 menus (m_controllerSetup always).
+- controlconfig-pad: the Xbox and PC branches become IfVar(9999 == 1) / IfVar(9999 == 0). Needs
+  a runtime hook so GetVar (0x6a5250, thiscall (id, x), ret 8) answers id 9999 with "pad in use"
+  (9999 is undeclared, so SetVar alone would be dropped) [guess until run].
+- footers-visible: show the 5 A/B footer objects (+ their Nav images) the PC hides.
+- video-apply-icon: Apply footer gets the backing + Generic_Elements-Xbox_Start image (cloned
+  from Reset's polys, appended) and its text moves to x 24 like the others.
+- pause-vibration (ui_ingame): show the Controller Vibration row.
+- Runtime (not data): while a pad is in use, game.c images_tick changes the first byte of each of
+  the 13 refused names (0x6dc770 compares against them only), so nothing matches and the Nav_*/
+  Xbox_* images draw; with the keyboard the names go back and the PC look stays (text only).
+  Chosen over a hook on 0x6dc770: no rebuild-time change to a drawing function, one write per
+  device switch.
+Writing: changed screens grow at their end (strings/lists/nodes appended; old copies left
+unused), later screens shift, the export is appended at the end of the package with only its
+export entry changed (as tools/upkpatch.py does).
+
 ## Progress
 - 2026-10-26: project set up; game unpacked; builds/gog.py; first translator run (74,050
   functions, ~100 s discovery, ~6 GB RAM, ~9-10 min to write 9.2 M lines in 301 files; a full
@@ -287,3 +385,27 @@ Findings (2026-10-26):
   [verified: SHOLD_SOUND_WAV, title and menu music from ~50 s]. STICKS: the 360's sense is Y DOWN
   positive (the menu config moves down on LeftY > 0.5; PC keyboard Desire_MoveY = S - W); the
   bridge had up positive (Ant: menu stick upside down) - fixed for both sticks.
+- 2026-10-27 (Ant's first play, continued): STRETCHED - the game's 4:3 1024x768 back buffer was
+  scaled to the 16:10 window. d3d9.c Present now passes a centred destination rectangle when the
+  window's shape differs from the back buffer's by more than 1% (bars at the sides) [verified: the
+  rectangle in the log; the look itself is Ant's to see]. The default resolution stays 1024x768;
+  any resolution in Video Options fills the window when its shape matches. CRASH after switching
+  to 2560x1600: 0x659620 (sets the viewport's widescreen flag) notifies a chain that is empty in
+  the menus and read address 0x38; hook widescreen_flag sets the flag and skips the notification
+  then [verified: disassembly + Ant's backtrace; guess until run: no side effect from the skipped
+  notification]. AUTO AIM - Ant: "default it 2 but make it a setting": the profile default
+  (WooEngineInfo.xxx, setting 116 Value1) is patched to 2 by make pad-data; the setting is the
+  game's own Pause > Options > Aim Assist row (section 8 d). A profile saved before keeps its
+  value. PACKAGE HASHES: the program checks its 43 script packages (WooEngineInfo.xxx is one;
+  Startup_*, ui_* and the maps are not) against SHA-1 hashes of their uncompressed data in a
+  resource and quits at start-up on a mismatch [verified: the table entry = SHA-1 of the
+  package; recompressed-unchanged starts, any changed value quits before the first tick]. So
+  upkpatch writes WooEngineInfo.xxx.sha1 and game.c package_hashes puts it into the table (in
+  the program image: LoadResource returns a pointer into it) before the engine starts
+  [verified: run75 starts]. The Coalesced files are listed too but the patched Coalesced.ini
+  loads without this. MENUS - the screen format decoded (section 8); patched menus installed by
+  make pad-data; hook screen_var (GetVar id 9999 = pad in use) and images_tick (Xbox button
+  images) in game.c [verified: run75/76/77 shots with a scripted pad: Settings footer B Back /
+  A Select; Control Config opens the Xbox 360 Controller Config screen (layout picker); Video
+  Options footer B Back / Y Reset / Start Apply; Start applies the resolution, the game's own
+  "keep these settings?" dialog follows and right + A accepts it (kept 1920x1080), no crash].
