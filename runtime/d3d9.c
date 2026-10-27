@@ -196,6 +196,10 @@ HOSTFN(sp_any_Release, 1)
     void *self = d3d_host(ARG(0));
     Ent *e = ent_of_guest(ARG(0));
     uint32_t r = ((uint32_t (*)(void *))VT(self)[2])(self);
+    if (r == 0) {
+        extern void d3d_lockcache_drop(void *host);
+        d3d_lockcache_drop(self);           /* (a dynamic texture's kept lock copies) */
+    }
     if (r == 0 && e) {
         pthread_mutex_lock(&dlock);
         ent_del(e);
@@ -561,8 +565,28 @@ static int fmt_info(uint32_t f, int *block)
     return 4;
 }
 
-typedef struct Lk { struct Lk *next; void *host; uint32_t sub; uint32_t shadow, bytes; void *hp; int readonly; } Lk;
+typedef struct Lk { struct Lk *next; void *host; uint32_t sub; uint32_t shadow, bytes; void *hp; int readonly, keep; } Lk;
 static Lk *lks;
+
+/* A DYNAMIC or SYSTEMMEM texture's lock gives the program the same copy every time, kept between
+   locks: Bink's frame buffers are SYSTEMMEM L8 textures (Y 1280x720, Cr and Cb 640x360, two sets
+   [verified: SHOLD_LOG_LOCKS]); it decodes into the buffers it was given whenever it likes and
+   redraws only the blocks that changed, so the other blocks must still hold the last frame (with a
+   fresh copy per lock the movies showed blocks of stale memory). The copy is the texture's truth
+   (the GPU never writes these); it goes when the texture does (d3d_lockcache_drop). */
+typedef struct Kept { struct Kept *next; void *host; uint32_t sub, shadow, bytes; } Kept;
+static Kept *kept;
+
+void d3d_lockcache_drop(void *host)
+{
+    pthread_mutex_lock(&dlock);
+    for (Kept **pk = &kept; *pk; ) {
+        Kept *k = *pk;
+        if (k->host == host) { *pk = k->next; gfree(k->shadow); free(k); }
+        else pk = &k->next;
+    }
+    pthread_mutex_unlock(&dlock);
+}
 
 static uint32_t rect_lock(CPU *c, void *self, uint32_t sub, int lock_i, D3DSURFACE_DESC *d, uint32_t lr,
                           uint32_t rect, uint32_t flags, HRESULT (*lock)(void *, uint32_t, D3DLOCKED_RECT *, const RECT *, DWORD))
@@ -575,16 +599,40 @@ static uint32_t rect_lock(CPU *c, void *self, uint32_t sub, int lock_i, D3DSURFA
     int block, bpb = fmt_info(d->Format, &block);
     uint32_t rows = (d->Height + block - 1) / block;
     uint32_t bytes = (uint32_t)hl.Pitch * rows;
-    uint32_t sh = galloc(bytes + 16);
-    if (!(flags & D3DLOCK_DISCARD))
-        memcpy(gptr(sh), hl.pBits, bytes);
+    uint32_t sh = 0;
+    int keep = (d->Usage & D3DUSAGE_DYNAMIC) || d->Pool == D3DPOOL_SYSTEMMEM;
+    if (getenv("SHOLD_LOG_LOCKS")) {
+        static int n;
+        if (d->Format < 0x100 && n++ < 80)
+            LOG(LOG_ALWAYS, "lock %p sub %u: %ux%u format %u usage %x pool %u flags %x", self, sub,
+                d->Width, d->Height, d->Format, d->Usage, d->Pool, flags);
+    }
+    if (keep) {
+        pthread_mutex_lock(&dlock);
+        for (Kept *k = kept; k; k = k->next)
+            if (k->host == self && k->sub == sub && k->bytes == bytes) { sh = k->shadow; break; }
+        pthread_mutex_unlock(&dlock);
+    }
+    if (!sh) {
+        sh = galloc(bytes + 16);
+        if (!(flags & D3DLOCK_DISCARD))
+            memcpy(gptr(sh), hl.pBits, bytes);
+        if (keep) {
+            Kept *k = malloc(sizeof *k);
+            *k = (Kept){NULL, self, sub, sh, bytes};
+            pthread_mutex_lock(&dlock);
+            k->next = kept;
+            kept = k;
+            pthread_mutex_unlock(&dlock);
+        }
+    }
     uint32_t off = 0;
     if (rect) {
         int32_t x = (int32_t)R32(rect), y = (int32_t)R32(rect + 4);
         off = (uint32_t)(y / block) * (uint32_t)hl.Pitch + (uint32_t)(x / block) * (uint32_t)bpb;
     }
     Lk *k = malloc(sizeof *k);
-    *k = (Lk){NULL, self, sub, sh, bytes, hl.pBits, (flags & D3DLOCK_READONLY) != 0};
+    *k = (Lk){NULL, self, sub, sh, bytes, hl.pBits, (flags & D3DLOCK_READONLY) != 0, keep};
     pthread_mutex_lock(&dlock);
     k->next = lks;
     lks = k;
@@ -615,7 +663,8 @@ static void rect_unlock_copy(void *self, uint32_t sub)
     }
     if (!k->readonly)
         memcpy(k->hp, gptr(k->shadow), k->bytes);
-    gfree(k->shadow);
+    if (!k->keep)
+        gfree(k->shadow);
     free(k);
 }
 

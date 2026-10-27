@@ -1,0 +1,23 @@
+// Bink's YUV -> RGB pixel shader, three planes (the game hands D3DXCompileShader RAD's HLSL for it:
+// c = (Y, Cr, Cb, consts.x); rgb = dot(tor|tog|tob, c); a = consts.w; result = pow(p, gamma))
+ps_2_0
+dcl t0.xy
+dcl_2d s0
+dcl_2d s1
+dcl_2d s2
+texld r0, t0, s0
+texld r1, t0, s1
+texld r2, t0, s2
+mov r3.x, r0.x
+mov r3.y, r1.x
+mov r3.z, r2.x
+mov r3.w, c3.x
+dp4 r4.x, c0, r3
+dp4 r4.y, c1, r3
+dp4 r4.z, c2, r3
+mov r4.w, c3.w
+pow r5.x, r4.x, c4.x
+pow r5.y, r4.y, c4.x
+pow r5.z, r4.z, c4.x
+pow r5.w, r4.w, c4.x
+mov oC0, r5

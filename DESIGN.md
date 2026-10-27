@@ -209,3 +209,12 @@ Findings (2026-10-26):
   (WooControllerTokenManager ButtonMappings), Auto Aim 2 as the pad default, the layout choice
   (XBoxConfigAlt1-3; the profile load always loads PCConfig), rumble.
 
+- 2026-10-26: MOVIES. The two D3DXCompileShader calls are Bink's YUV -> RGB pixel shaders (RAD's
+  HLSL, logged: 3 planes, and 4 with alpha; registers fixed, c0-c4 set by the caller): the runtime
+  returns our ps_2_0 equivalents (data/bink/*.psh, assembled into runtime/bink_shaders.h) in an
+  ID3DXBuffer. Block corruption: Bink's frame buffers are SYSTEMMEM L8 textures (Y 1280x720, Cr/Cb
+  640x360, two sets) it decodes into between locks, redrawing only changed blocks; the bridge gave
+  a fresh copy per lock. DYNAMIC and SYSTEMMEM textures now keep one copy per level between locks
+  (dropped on release) [verified: the market intro plays clean, shot_1200]. Test aid: a user folder
+  whose Coalesced.ini starts at Map=market_global_persistent (work/testplay) reaches the first
+  level's intro in ~10 s instead of ~3 min of title movies.
