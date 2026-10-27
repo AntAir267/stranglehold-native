@@ -460,6 +460,13 @@ static const RECT *present_dest(RECT *r)
 {
     int ww, wh;
     host_window_pixels(&ww, &wh);
+    {
+        static int lw, lh; static uint32_t lbw, lbh;
+        if (ww != lw || wh != lh || bb_w != lbw || bb_h != lbh) {
+            LOG(LOG_ALWAYS, "present: window %dx%d pixels, back buffer %ux%u", ww, wh, bb_w, bb_h);
+            lw = ww; lh = wh; lbw = bb_w; lbh = bb_h;
+        }
+    }
     if (ww <= 0 || wh <= 0 || !bb_w || !bb_h)
         return NULL;
     double wa = (double)ww / wh, ba = (double)bb_w / bb_h;

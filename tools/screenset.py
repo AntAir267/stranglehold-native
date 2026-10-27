@@ -734,7 +734,40 @@ def patch_video_apply_icon(ss):
     print('video-apply-icon: polys @%#x @%#x added to @%#x' % (p1, p2, agrp['off']))
 
 
+def patch_main_exit_y(ss):
+    """m_MainMenu: the PC-only Exit Game footer is the Y button (event 2113; the screen's Y handler
+    opens the exit prompt) but carries the A image (never drawn on PC) and sits where the A
+    Select footer is (x 172 vs 170), which footers-visible shows [verified: dump of m_MainMenu;
+    Ant: "it says A is exit game on main menu"]. It gets the backing + Y image of the hidden
+    'storage location' Y footer and that footer's place (x 318)."""
+    sc = ss.screen('m_MainMenu')
+    exit_obj = store_obj = None
+    for n in sc.walk_nodes():
+        if n['tag'] != 'OBJ' or 2113 not in [h['event'] for h in n.get('handlers', [])]:
+            continue
+        texts = [m['text'] for m in _subtree(n) if m['tag'] == 'TEXT']
+        if texts == ['Exit_Game']:
+            exit_obj = n
+        elif texts and 'STORAGE_LOCATION' in texts[0]:
+            store_obj = n
+    assert exit_obj and store_obj
+    sgrp, egrp = store_obj['children'][0], exit_obj['children'][0]
+    back, icon = [c for c in sgrp['children'] if c['tag'] == 'POLY'][:2]
+    p1, p2 = clone_poly(sc, back['off']), clone_poly(sc, icon['off'])
+    keep = [c['off'] for c in egrp['children'] if c['tag'] != 'POLY']     # drop the A image
+    blob = struct.pack(sc.e + 'I', len(keep) + 2) + b''.join(struct.pack(sc.e + 'I', k) for k in [p1, p2] + keep)
+    sc.put32(egrp['off'] + 0x18, sc.append(blob))
+    # its own copy of the transform block, at the storage footer's position
+    tr = sc.u32(exit_obj['off'] + 0x14)
+    blk = bytearray(sc.b[tr:tr + 80])
+    str_ = sc.u32(store_obj['off'] + 0x14)
+    blk[24:36] = sc.b[str_ + 24:str_ + 36]
+    sc.put32(exit_obj['off'] + 0x14, sc.append(bytes(blk)))
+    print('main-exit-y: Exit Game footer @%#x -> Y image, x %g' % (exit_obj['off'], store_obj['xform'][6]))
+
+
 PATCHES = {
+    'main-exit-y': patch_main_exit_y,
     'controlconfig-always': lambda ss: patch_settings_route(ss, 'always'),
     'controlconfig-pad': lambda ss: patch_settings_route(ss, 'pad'),
     'footers-visible': patch_footers_visible,

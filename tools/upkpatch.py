@@ -220,13 +220,14 @@ def patch_ui(game, user):
     controller-layout screen while a pad is in use (screen variable 9999, answered by the
     runtime), the A/B footers the PC hides shown (their Xbox button images drawn while a pad is in
     use: runtime/game.c), the video screen's Apply footer with the Start button, and the pause
-    menu's Vibration row (hidden on PC: the port has rumble now)."""
+    menu's Vibration row (hidden on PC: the port has rumble now), and the main menu's Exit Game
+    footer on the Y button it answers to."""
     import subprocess
     src = os.path.join(game, 'StrangleholdGame', 'CookedPC')
     dst = os.path.join(user, 'StrangleholdGame', 'CookedPC')
     os.makedirs(dst, exist_ok=True)
     tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'screenset.py')
-    for pkg, names in (('ui_shell', ['controlconfig-pad', 'footers-visible', 'video-apply-icon']),
+    for pkg, names in (('ui_shell', ['controlconfig-pad', 'footers-visible', 'video-apply-icon', 'main-exit-y']),
                        ('ui_ingame', ['pause-vibration'])):
         subprocess.run([sys.executable, tool, 'patch', os.path.join(src, pkg + '.xxx'),
                         os.path.join(dst, pkg + '.xxx')] + names, check=True,

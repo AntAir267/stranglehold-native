@@ -48,6 +48,18 @@ ICALL_FPU = {
     0x40be75: None,
 }
 
+# Code changed before translation (tools/recomp.py): address -> (original bytes, new bytes).
+CODE_PATCHES = {
+    # the Video Options resolution list keeps only 15 sizes (a chain of width/height compares,
+    # 0x6d5690-0x6d57b8: 640x480/400, 800x600, 1024x768, 1280x1024/800/720, 1600x1200,
+    # 2560x1600, 1920x1200/1080, 1680x1050, 1440x900, 1152x720, 1360x768, 848x480) [verified:
+    # disassembly]: no 2560x1440 (Ant's 16:9 monitor showed the 16:10 2560x1600 with bars). Every
+    # size the display offers is accepted, as GOG's loader did ("Unlock all resolutions" in
+    # Binaries/patches/main.patch: the same bytes): the first compare's jne goes, and the 640
+    # branch jumps to the accept code 0x6d57ba
+    0x6d56a4: ('75 1D 81 F9 E0 01 00 00 0F 84 08 01 00 00', '90 90 81 F9 E0 01 00 00 E9 09 01 00 00 90'),
+}
+
 MEM_OVERRIDES = {}
 # Functions the runtime may hook (hook_<name>, run at the function's entry; returns 1 if it did the
 # call itself). Hooks with no handler set cost nothing.

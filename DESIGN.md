@@ -409,3 +409,15 @@ export entry changed (as tools/upkpatch.py does).
   A Select; Control Config opens the Xbox 360 Controller Config screen (layout picker); Video
   Options footer B Back / Y Reset / Start Apply; Start applies the resolution, the game's own
   "keep these settings?" dialog follows and right + A accepts it (kept 1920x1080), no crash].
+- 2026-10-27 (Ant: "it says A is exit game on main menu and the game is running in 4:3"):
+  EXIT GAME - m_MainMenu's PC-only Exit Game footer answers Y (event 2113) but carried the A
+  image (never drawn on PC) at the A Select footer's place; screenset.py main-exit-y gives it the
+  backing + Y image and the hidden storage footer's place [verified: run81 shot "(Y) Exit Game"].
+  4:3 - Ant's game runs full screen on his primary monitor, 2560x1440 (16:9; the Win Max panel is
+  2560x1600, plus a portrait 1080x1920) [verified: kscreen-doctor], with the game set to 2560x1600,
+  so the letterbox drew side bars. The game's own picture is full 16:10 [verified: run78 gameplay
+  shot]. The Video Options list kept only 15 sizes (no 2560x1440); builds/gog.py CODE_PATCHES (new
+  translator feature, tools/recomp.py, original bytes checked) drops that filter as GOG's loader
+  did [verified: run80, the list steps 1920x1080, 1920x1200, 1920x1440, 2048x1152, 2048x1536].
+  present_dest logs the window and back buffer sizes when they change. Open: a first-run default
+  resolution matching the screen (the game starts at 1024x768).
