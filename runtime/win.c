@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <strings.h>
 #include <SDL3/SDL.h>
+#include <pthread.h>
 #include "runtime.h"
 #include "options.h"
 #include "win.h"
@@ -17,6 +18,7 @@
 
 static SDL_Window *window;
 static int sdl_ok;
+static pthread_t sdl_thread;         /* the thread that started SDL: the one that takes host events */
 static uint8_t vk_state[256];
 static int fullscreen;
 int start_fullscreen;                   /* --fullscreen: go fullscreen at the first display mode */
@@ -135,6 +137,7 @@ void win_init(void)
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS | SDL_INIT_AUDIO))
         fatal("SDL_Init: %s", SDL_GetError());
     sdl_ok = 1;
+    sdl_thread = pthread_self();
     input_set_rumble_handler(rumble);
     if (!strcasecmp(option_str("display", ""), "fullscreen"))
         start_fullscreen = 1;
@@ -368,9 +371,12 @@ static void key_event(const SDL_KeyboardEvent *k, int down)
     post_message(down ? (alt ? 0x0104 : 0x0100) : (alt ? 0x0105 : 0x0101), generic, lparam);
 }
 
+/* Host events are taken on the thread that started SDL only (the program's main thread, which
+   pumps its window messages): the engine presents from its render thread, and two threads
+   reading the Wayland display at once crashed in libwayland [verified: a run's backtrace]. */
 void host_pump(void)
 {
-    if (!sdl_ok)
+    if (!sdl_ok || !pthread_equal(pthread_self(), sdl_thread))
         return;
     if (window)
         SDL_SetWindowRelativeMouseMode(window, input_mouse_captured() != 0);

@@ -171,3 +171,13 @@ Findings (2026-10-26):
   Press ENTER" by frame 3600 [verified: work/testuser/shot_3600.png]. ~19 frames a second over the
   run (3810 frames in 200 s, intro movies included): speed not looked at yet. Next: input into the
   window (keyboard, then the pad path of section 4), the two missed shaders, frame rate.
+- 2026-10-26: KEYBOARD. The engine never pumps window messages itself (wx did, between its idle
+  ticks): runtime/user32.c pump_window_messages runs before each tick in the wxEntry loop (WM_QUIT
+  ends it). Host (SDL) events are taken only on the thread that started SDL: the render thread
+  presents here, and two threads in libwayland crashed. Scripted Enter on the title opens the main
+  menu (3D tea-house scene behind it) and Down moves its highlight [verified: shot_3750,
+  shot_4100]. During intro movies the game thread sits in render-fence waits (0x6e40d0 -> Sleep),
+  so a tick there can take ~13 s and keys wait for it. Frame rate: 20 fps exactly in a hidden
+  window, 30 headless, while the engine ticks 40/s: the hidden window's presentation is held back
+  by the compositor, not the game [guess: check in a visible window]. --test (deterministic
+  turns) deadlocks with UE3's threads: real-time --hidden runs are used instead.

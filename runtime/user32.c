@@ -999,6 +999,8 @@ static void queue_put(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
 void post_message(uint32_t msg, uint32_t wparam, uint32_t lparam)
 {
     uint32_t h = input_hwnd();
+    Win *w = win_of(h);
+    LOG(LOG_WIN, "input message %x (%x) to window %x, thread %x", msg, wparam, h, w ? w->tid : 0);
     if (h) queue_put(h, msg, wparam, lparam);
 }
 
@@ -1220,9 +1222,9 @@ API(USER32, MsgWaitForMultipleObjects, 5)
     return r;
 }
 
-API(USER32, TranslateMessage, 1)
+static int translate_message(uint32_t m)
 {
-    uint32_t m = ARG(0), msg = R32(m + 4), vk = R32(m + 8);
+    uint32_t msg = R32(m + 4), vk = R32(m + 8);
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
         int ch = vk_to_char(vk, host_shift_down());
         if (ch) {
@@ -1233,9 +1235,11 @@ API(USER32, TranslateMessage, 1)
     return 0;
 }
 
-API(USER32, DispatchMessageA, 1)
+API(USER32, TranslateMessage, 1) { return translate_message(ARG(0)); }
+
+static uint32_t dispatch_message(CPU *c, uint32_t m)
 {
-    uint32_t m = ARG(0), hwnd = R32(m), msg = R32(m + 4);
+    uint32_t hwnd = R32(m), msg = R32(m + 4);
     if (msg == WM_TIMER && R32(m + 12))
         return guest_call(c, R32(m + 12), 4, hwnd, msg, R32(m + 8), (uint32_t)now_ms());
     if (!win_of(hwnd))
@@ -1251,7 +1255,30 @@ API(USER32, DispatchMessageA, 1)
     return r;
 }
 
-API(USER32, DispatchMessageW, 1) { return w_USER32_DispatchMessageA_body(c); }
+API(USER32, DispatchMessageA, 1) { return dispatch_message(c, ARG(0)); }
+API(USER32, DispatchMessageW, 1) { return dispatch_message(c, ARG(0)); }
+
+/* The program's message loop done for it (game.c: wxWidgets' loop pumped the engine's window
+   messages between its idle ticks, and the engine does not): every waiting message of this
+   thread translated and dispatched. Returns 1 if WM_QUIT came. */
+int pump_window_messages(CPU *c)
+{
+    static uint32_t m;
+    int quit = 0;
+    if (!m) m = galloc(28);
+    host_pump();
+    while (next_message(m, 0, 0, 0, 1)) {
+        if (R32(m + 4) == 0x0012) {     /* WM_QUIT */
+            quit = 1;
+            break;
+        }
+        LOG(LOG_WIN, "pump: message %x to %x", R32(m + 4), R32(m));
+        translate_message(m);
+        dispatch_message(c, m);
+    }
+    return quit;
+}
+
 
 /* ------------------------------------------------------------------ painting */
 API(USER32, InvalidateRect, 3)

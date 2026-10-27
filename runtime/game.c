@@ -29,7 +29,9 @@ void frame_rate_reapply(void) {}
    0x6f3000 sees an empty appCmdLine there [verified: gdb on the translated ParseParam]). So
    wxEntry stands in for the -nowxwindows branch (0x401b4f) [verified: disassembly]: the flag
    0x10619a0 cleared, then GEngineLoop (0x10619a4) Init (0x407e70) and Tick (0x4054e0) until
-   GIsRequestingExit (0x107147c); WinMain calls Exit (0x404e90) itself after. */
+   GIsRequestingExit (0x107147c); WinMain calls Exit (0x404e90) itself after. Between ticks the
+   window messages are pumped, as wx's loop did: the engine itself never calls PeekMessage
+   [verified: gdb, no PeekMessage calls in a 30 s run; keys never reached the window procedure]. */
 #define ENGINE_LOOP        0x10619a4u
 #define USING_WX           0x10619a0u
 #define REQUESTING_EXIT    0x107147cu
@@ -49,8 +51,17 @@ API_CDECL(WXMSW262U, _wxEntry__YAHPAUHINSTANCE____0PADH_Z)
     if (!R32(REQUESTING_EXIT)) {
         LOG(LOG_ALWAYS, "engine: init");
         r = engine_call(c, 0x407e70u);
-        while (!R32(REQUESTING_EXIT))
-            engine_call(c, 0x4054e0u);
+        extern int pump_window_messages(CPU *c);
+        while (!R32(REQUESTING_EXIT)) {
+            if (pump_window_messages(c))        /* (as wx's loop: messages, then the idle tick) */
+                W32(REQUESTING_EXIT, 1);
+            else {
+                static unsigned long ticks;
+                engine_call(c, 0x4054e0u);
+                if (++ticks % 200 == 0)
+                    LOG(LOG_WIN, "engine: %lu ticks, %lu frames", ticks, frame_count);
+            }
+        }
         LOG(LOG_ALWAYS, "engine: exit requested");
     }
     return r;
