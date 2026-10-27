@@ -100,7 +100,7 @@ install: all
 		'Comment=Stranglehold recompiled for Linux and Vulkan' \
 		'Exec=$(PREFIX)/stranglehold' 'Icon=$(PREFIX)/stranglehold.png' 'Categories=Game;' \
 		'StartupWMClass=stranglehold-native' 'Terminal=false' > $(APPS)/stranglehold-native.desktop
-	@echo "installed in $(PREFIX); the applications menu has L.A. Rush"
+	@echo "installed in $(PREFIX); the applications menu has Stranglehold"
 
 # Function-level check against the original code in Unicorn (tests/fncheck.c)
 UNICORN ?= $(firstword $(wildcard .venv/lib/python3*/site-packages/unicorn))

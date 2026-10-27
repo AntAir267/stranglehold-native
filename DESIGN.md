@@ -275,3 +275,8 @@ Findings (2026-10-26):
   trimmed to this port's (display, rumble, controller_layout, frame_limit); xbox_data (LA Rush's)
   off. skip_intro (tests) now skips Stranglehold's logo/legal movies and the opening cinematic
   (intro_c0010): the title in ~60 s instead of ~190 s (work/testmenu has it on).
+- 2026-10-26: a visible window (--window) runs at ~100 fps on the laptop (2588 frames in 25 s at the
+  title) [verified: run log]: the 20 fps of the --hidden runs is the compositor holding back an
+  unshown window. make install -> ~/.local/opt/stranglehold-native + applications-menu entry
+  "Stranglehold" (started with no arguments it plays, user folder ~/.local/share/stranglehold-native
+  with the controller data from make pad-data).
