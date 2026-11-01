@@ -421,3 +421,17 @@ export entry changed (as tools/upkpatch.py does).
   did [verified: run80, the list steps 1920x1080, 1920x1200, 1920x1440, 2048x1152, 2048x1536].
   present_dest logs the window and back buffer sizes when they change. Open: a first-run default
   resolution matching the screen (the game starts at 1024x768).
+- 2026-11-01: SHADER CACHE (GAME-GOALS "Shaders"): on and working, nothing to fix. DXVK 3.1.1 keeps its
+  own shader cache in ~/.cache/dxvk (<hash>.dxvk.bin/.lut), and RADV its pipeline cache in
+  ~/.cache/mesa_shader_cache. [verified: run with both empty "Created cache file", 39 MB + 58 MB
+  written; next run "Found cache file ... 6272 shaders"; the installed copy found Ant's real cache
+  and added to it.] DXVK_STATE_CACHE_PATH in d3d9.c names a variable this DXVK no longer reads
+  (it has DXVK_SHADER_CACHE_PATH) [verified: the library's strings]: harmless. First-run stutter,
+  title + menus + start of the first level, hidden window, machine under load: empty caches slowest
+  frame after the first 300 = 57.1 ms, filled 69.6 ms, both ~50 ms a frame (the hidden window's
+  20 fps hold), so no compile hitch showed and no pipeline list is needed so far. The first 300
+  frames' worst (403 ms empty, 899 ms filled) is start-up loading, not shaders [guess: it isn't
+  worse with empty caches]. Limits: hitches under 50 ms can't show at that hold, and later levels
+  weren't measured; re-measure in a visible window if Ant sees stutter. Open: Ant's log of
+  2026-10-30 says "Created cache file" for the real cache, though that file's date and contents
+  weren't reset; unexplained, and today's installed run found it normally.
