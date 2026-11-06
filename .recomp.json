@@ -1,0 +1,16 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "John Woo Presents Stranglehold",
+  "system": "PC (Windows)",
+  "type": "recomp",
+  "original": { "revision": "GOG 1.1 v2", "sha1": "d8bfbf47ad8a348b85f173e9f30ad7eddd2fe4ff" },
+  "project": "Stranglehold native",
+  "status": "in-progress",
+  "started": "2026-10-26",
+  "targets": ["Linux"],
+  "toolchain": "Capstone",
+  "approach": "Static recompilation of the Unreal Engine 3 program and its DLLs to C with our own translator; a new Windows stand-in on SDL3; Direct3D 9 to Vulkan through DXVK.",
+  "maintainers": [{ "name": "AntAir267", "link": "https://github.com/AntAir267" }],
+  "notes": "Generally untested: only the menus and the first level have been played, with a controller, on one computer. No downloads; build it from your own GOG copy. Adds the Xbox 360 version's controls (layouts, Control Config screen, button pictures and prompts, rumble), every screen resolution, and bars instead of stretching.",
+  "help": ["Playing further than the first level", "Testing on other graphics cards"]
+}

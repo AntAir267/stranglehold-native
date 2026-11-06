@@ -1,0 +1,41 @@
+name: Bug report
+description: Something crashed, looks wrong or doesn't work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Never attach game files, saves or anything extracted from the game. Text logs are fine."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got. Where in the game (menu, chapter, level).
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: The commit you built (git log -1 --format=%h)
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: Computer
+      description: Linux distribution, graphics card and driver, and the controller if one was in use
+    validations:
+      required: true
+  - type: checkboxes
+    id: game
+    attributes:
+      label: Game
+      options:
+        - label: My game files are the GOG release (1.1 v2) and the build accepted them
+          required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The last 100 lines of last-run.log from ~/.local/share/stranglehold-native
+      render: text
