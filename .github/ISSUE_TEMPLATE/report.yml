@@ -1,0 +1,21 @@
+name: Played further / works on my computer
+description: Tell us how far it got or what hardware it ran on, even if nothing broke
+labels: [report]
+body:
+  - type: textarea
+    id: how-far
+    attributes:
+      label: How far you played
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: Computer
+      description: Linux distribution, graphics card and driver, controller
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
