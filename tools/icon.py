@@ -9,7 +9,7 @@ import io
 import struct
 import sys
 
-sys.path.insert(0, __file__.rsplit('/', 1)[0])
+sys.path.insert(0, __file__.rsplit('/', 2)[0] + '/third_party/antistatic/translator')   # (the toolkit's PE reader)
 from pe import PE
 
 RT_ICON, RT_GROUP_ICON = 3, 14

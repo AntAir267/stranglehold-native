@@ -37,8 +37,13 @@ compiling, and:
 - gcc, make, Python 3 with [Capstone](https://www.capstone-engine.org/) 5.0 (a `.venv` in this
   folder is used if present: `python3 -m venv .venv && .venv/bin/pip install capstone==5.0.9`),
   and liblzo2 (the game's packages are LZO-compressed).
+- [AntiStatic](https://github.com/AntAir267/AntiStatic-Recomp-Toolkit), the shared recompilation
+  toolkit this port is built on, as a submodule: clone with `--recursive`, or run
+  `git submodule update --init` after cloning.
 - SDL3 3.4.18, built as a shared library into `third_party/sdl3/`.
-- DXVK 3.1.1, built natively with SDL3 (only d3d9), installed into `third_party/dxvk-native/`.
+- DXVK 3.1.1's source in `third_party/dxvk/` (`git clone --recursive --branch v3.1.1
+  https://github.com/doitsujin/dxvk third_party/dxvk`); `make dxvk` builds it natively with SDL3
+  through the toolkit's script into `third_party/dxvk-native/`, with no patches.
   See [third_party/README.md](third_party/README.md).
 - The game: unpack the GOG installer (for example with innoextract) so that `Binaries/` and
   `StrangleholdGame/` are in `~/.local/share/stranglehold-native/game`, or pass `GAME=<folder>`.
@@ -58,8 +63,13 @@ controller_layout, frame_limit).
 and why, the controller work, the decoded Midway menu format (`tools/screenset.py`), and what
 was tried and dropped. Code facts are marked [verified] with their evidence or [guess].
 
-- `tools/`: the translator (x86 to C), package and menu tools for the game's files.
-- `runtime/`: the Windows, Direct3D, DirectSound and DirectInput stand-ins, and the game hooks.
+- [AntiStatic](https://github.com/AntAir267/AntiStatic-Recomp-Toolkit) (`third_party/antistatic`,
+  pinned to a release): the translator (x86 to C), the CPU core, the Windows, DirectSound and
+  DirectInput stand-ins and the Direct3D 9 bridge to DXVK.
+- `runtime/`: this game's own code: `port.h` (what the toolkit needs to know about the game), the
+  game hooks and controller work (`game.c`), D3DX (`d3dx.c`) and the network and optional
+  system parts it does without.
+- `tools/`: package and menu tools for the game's files (`upkpatch.py`, `screenset.py`, ...).
 - `builds/gog.py`: everything specific to this one build of the game, as addresses only.
 
 ## Contributing
@@ -69,6 +79,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Never attach or commit game files.
 ## Licence
 
 The code here is released into the public domain under the [Unlicense](LICENSE).
+AntiStatic is its own repository (Unlicense) linked as a submodule.
 `third_party/dr_libs/dr_flac.h` is David Reid's (public domain or MIT-0). SDL3 and DXVK (zlib
 licence) are not included; you build them yourself.
 
