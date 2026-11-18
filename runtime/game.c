@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #include "runtime.h"
 #include "options.h"
@@ -71,8 +72,8 @@ static void motors(uint16_t low, uint16_t high)
         return;
     if ((low != 0) != (was_low != 0) || (high != 0) != (was_high != 0))
         LOG(LOG_INPUT, "rumble: motors %u %u", low, high);
-    for (int s = 0; s < PAD_SLOTS; s++)
-        input_joy_rumble(s, low, high, low || high ? 200 : 0);
+    input_joy_rumble(0, low, high, low || high ? 200 : 0);   /* (the toolkit's joystick 0: every
+                                                                controller playing as player 1) */
     was_low = low;
     was_high = high;
 }
@@ -352,8 +353,44 @@ static void images_tick(void)
 
 static int hook_button_name_fn(CPU *c);
 
+/* SKIP INTRO (options.txt skip_intro = on; for tests): the start-up logo and legal movies and the
+   opening cinematic aren't found, so the game moves on to the title (~60 s sooner) [verified:
+   run58, skipped (skip_intro) in the log, the title shown] */
+int port_file_hidden(const char *winpath)
+{
+    static int on = -1;
+    if (on < 0) on = option_bool("skip_intro", 0);
+    if (!on || !winpath) return 0;
+    const char *b = strrchr(winpath, '\\');
+    b = b ? b + 1 : winpath;
+    static const char *const intro[] = {"AMD64.bik", "intro_Logo_Midway_HD.bik", "intro_Logo_TigerHill_HD.bik",
+                                        "intro_Logo_Unreal.bik", "intro_Logo_Shared.bik", "intro_Legal_US.bik",
+                                        "intro_Legal_Euro.bik", "RP_Logo_bink.bik", "ndgames.bik", "intro_c0010_bink.bik"};
+    for (size_t i = 0; i < sizeof intro / sizeof *intro; i++)
+        if (!strcasecmp(b, intro[i]))
+            return 1;
+    return 0;
+}
+
+/* this port's keys in options.txt, described there like the toolkit's own */
+const char *port_option_help(const char *key)
+{
+    if (!strcasecmp(key, "controller_layout"))
+        return "controller_layout: 1 (the default), 2, 3 or 4 - the Xbox 360 version's controller "
+               "configurations (also picked in Settings > Control Config with a controller)";
+    if (!strcasecmp(key, "skip_intro"))
+        return "skip_intro: on skips the logo and legal movies and the opening cinematic (for tests)";
+    return NULL;
+}
+
 void game_init(void)
 {
+    /* no dead zone of the toolkit's on top of the engine's own (the control configs apply theirs:
+       DESIGN.md section 4), unless options.txt asks for one */
+    if (!option_str("controller_deadzone", NULL)) {
+        option_set("controller_deadzone", "0");
+        pad_options();
+    }
     hook_screen_var = hook_screen_var_fn;
     hook_widescreen_flag = hook_widescreen_flag_fn;
     hook_localize = hook_localize_fn;
@@ -466,22 +503,19 @@ static void send_axis(CPU *c, uint32_t vp, int key, float v, float dt)
                f2u(v), f2u(dt));
 }
 
-/* every connected controller together, as player 1's: buttons held on any, each axis the one
-   furthest from rest */
+/* every connected controller together, as player 1's (the toolkit's merge: buttons held on any,
+   each axis the one furthest from rest) */
 static int pads_merged(uint8_t b[PAD_BUTTONS], int a[PAD_AXES])
 {
-    int any = 0;
-    memset(b, 0, PAD_BUTTONS);
-    memset(a, 0, PAD_AXES * sizeof *a);
-    for (int s = 0; s < PAD_SLOTS; s++) {
-        uint8_t pb[PAD_BUTTONS];
-        int pa[PAD_AXES];
-        if (!pad_read(s, pb, pa)) continue;
-        any = 1;
-        for (int i = 0; i < PAD_BUTTONS; i++) b[i] |= pb[i];
-        for (int i = 0; i < PAD_AXES; i++) if (abs(pa[i]) > abs(a[i])) a[i] = pa[i];
+    PadState st;
+    if (!pad_player_state(0, &st)) {
+        memset(b, 0, PAD_BUTTONS);              /* (nothing held: the last controller unplugged) */
+        memset(a, 0, PAD_AXES * sizeof *a);
+        return 0;
     }
-    return any;
+    memcpy(b, st.button, PAD_BUTTONS);
+    memcpy(a, st.axis, PAD_AXES * sizeof *a);
+    return 1;
 }
 
 /* SHOLD_FIND=<vtable hex>@<tick> (tests): objects with that vtable, listed once at that tick */

@@ -1,5 +1,5 @@
 /* Bink's YUV -> RGB pixel shaders as bytecode: data/bink/yuv3.psh and yuva4.psh assembled with
-   tools/d3dasm.py asm (our own shader text; regenerate this file if those change). */
+   third_party/antistatic/tools/d3d9/d3dasm.py asm (our own shader text; regenerate this file if those change). */
 #pragma once
 #include <stdint.h>
 static const uint8_t bink_yuv3[288] = {

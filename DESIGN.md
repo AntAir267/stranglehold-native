@@ -435,3 +435,119 @@ export entry changed (as tools/upkpatch.py does).
   weren't measured; re-measure in a visible window if Ant sees stutter. Open: Ant's log of
   2026-10-30 says "Created cache file" for the real cache, though that file's date and contents
   weren't reset; unexplained, and today's installed run found it normally.
+- 2026-11-12: MOVE ONTO ANTISTATIC v0.2.0 (Ant: every relevant game fully onto the shared toolkit;
+  graphics stay: d3d9.c, d3dx.c, bink_shaders.h, DXVK). Done on a local branch while the toolkit
+  was private; it went public on 2026-11-18 at v0.2.38 and this work was published then as one
+  commit (see that entry). third_party/antistatic is the toolkit pinned at
+  v0.2.0 as a submodule; runtime/ keeps only this game's files (game.c, d3d9.c, d3dx.c,
+  d3d9_bridge.h, bink_shaders.h, devrec.c, net.c, optional.c) and port.h; tools/ loses its
+  translator copy (recomp, codegen, discover, fpustack, simd, pe, x86, image, memdiff).
+  - Port-specific pieces of the old copies, now port.h values or hooks: the virtual folder
+    C:\Stranglehold with the start folder Binaries, the command line -nowxwindows, the volume
+    label (port.h); skip_intro's movie list (port_file_hidden in game.c); the merged-controller
+    read (pad_player_state) and rumble on the toolkit's joystick 0 (game.c); no toolkit dead zone
+    unless options.txt sets controller_deadzone (the engine's configs apply their own).
+  - builds/gog.py names the modules without the Binaries/ prefix and the Makefile translates
+    from <game>/Binaries (the toolkit's translator finds files by name in one folder).
+  - Gaps reported to the AntiStatic chat: its DirectInput refuses IID_IDirectInput8W and
+    IDirectInputDevice8W, which UE3 uses for the mouse, so runtime/dinput.c (ours) stays and
+    the toolkit's is skipped (Makefile TK_SKIP) until a toolkit version has them; options.txt help
+    lines are a fixed toolkit list (controller_layout has no description now).
+  - Baselines first (work/baseline.sh: scripted real-time runs, since --test deadlocks with UE3's
+    threads): R1 menus with the pad (main menu, Settings footer, 360 Control Config, Video
+    Options), R2 menus with the keyboard, R3 the first level with the pad (tutorial prompt, play,
+    fire with rumble, sound, frame times); results in work/baseline/before.
+  - Translation compared function by function (work/genfuncs_norm.py: comments removed, the
+    toolkit's traced stores W32T(insn, ...) read as plain ones, which they are unless built with
+    -DFTRACE): 74,051 functions before, 73,683 after. The 444 only the old translator had are
+    false entries [verified: they start at round-number immediates such as 0x00ae0900 and
+    0x006b0050, several mid-instruction; the toolkit takes code addresses from relocations];
+    the 76 new ones are C++ exception handlers (_eh frames: the toolkit runs exceptions, the old
+    runtime stopped on any throw) and DFEngine.dll code. Of the 73,607 in both, 1,115 differ in
+    code: fnstsw where only the condition bits are read (fpu_sw_cc, 693), cpu_rdtsc(c) (178, same
+    clock), flags no longer computed when nothing reads them, code that followed a false entry
+    now inline (goto instead of a call), SSE2 movsd/cmpsd as SSE2 (33; dormant while CPUID
+    says no SSE2: FIXES.md 2026-11-07), segment-register stores and cvttsd2si translated (they
+    stopped the program before), SSE registers kept across calls [verified:
+    work/baseline/diff_kinds.txt and work/gendiff_one.sh on examples of each]. Discovery took
+    728 s against our translator's ~100 s.
+  - Result [verified: work/baseline/after against before, same scripts, the laptop's queue]: every
+    check line the same (Xbox button images shown, 18 prompt names and display names, Xbox names
+    in use, WooEngineInfo hash, present sizes 1920x1080 / 2560x1600, the force feedback manager
+    found and rumble driven by firing); all 6 menu shots identical (main menu Y Exit Game,
+    Settings footer, 360 Control Config, Video Options footer, keyboard PC menus); the 3 level
+    shots show the same scenes at real-time-shifted moments (one run had the tutorial box already
+    closed at frame 1000; ammo 35/34); sound level per 10 s alike. Rumble levels and frame counts
+    vary between any two real-time runs. Mouse not exercised by the scripts (our dinput.c, kept).
+- 2026-11-13: ANTISTATIC v0.2.2 (v0.2.1 had the gaps above; v0.2.2 fixes v0.2.1's weak runtime
+  defaults losing to the translator's stubs). runtime/dinput.c and TK_SKIP gone (the toolkit's
+  DirectInput takes IDirectInput8W: "DirectInput8Create(... IID_IDirectInput8W) -> DI_OK", mouse
+  device made); builds/gog.py MODULES are 'Binaries/...' again and the module-table sed is gone;
+  net.c's IPHLPAPI GetAdaptersInfo dropped (the toolkit's winmore.c answers it the same: no
+  adapters, ERROR_NO_DATA); game.c port_option_help describes controller_layout and skip_intro.
+  Translation against v0.2.0's [verified: work/genfuncs_norm.py]: the same 73,683 functions;
+  2,333 differ, 2,330 of them only by the X87() wrapper on x87 arithmetic (identical once it is
+  removed) and 3 (0x6e3d10, 0x6fd210, 0x78bc70) by the exception-resume change (the CPU record
+  and frame read back after __builtin_setjmp). Discovery 170 s (61 s unloaded per the toolkit).
+  Checks [verified: work/baseline/after022b against before]: every check line the same, menu and
+  keyboard shots identical, the level shots the same scenes, sound from 10 s, rumble on firing,
+  first frame at 3.5 s. A first try (after022) ran while another chat compiled on the laptop
+  (load 30): start-up took 22 s and the level run ended before the fire input; not a port
+  difference, so the checks wait for load under 8 now.
+- Next pin move: AntiStatic v0.2.6 or later (its winmore.c calls are all weak defaults, so a port's
+  own stand-in wins; nothing of ours depends on it). From v0.2.13 the translator drops decorated
+  exports not ending in Z as functions (data: vtables, static members): msvcp80.dll has 317 and
+  msvcr80.dll 5, so expect those false functions gone in the function-by-function compare.
+  Coming: the toolkit's own D3D9 DXVK bridge (ETM's, with d3d9.c's generic parts); when tagged,
+  move d3d9.c's game-specific parts (letterbox present_dest, Bink lock copies, SHOLD_SHOT) onto
+  it. Regenerate and run work/baseline.sh after, with the laptop quiet.
+- 2026-11-13: ANTISTATIC v0.2.16 WITH ITS DIRECT3D 9 BRIDGE. runtime/d3d9.c, d3d9_bridge.h and
+  tools/d3d9gen.py / d3dasm.py are gone: the toolkit's runtime/d3d9 (ETM's bridge, of which ours was
+  a subset) with port.h PORT_D3D9_KEEP_ASPECT (the black-bar picture) and
+  PORT_D3D9_KEEP_LOCK_COPIES (the Bink lock copies); runtime/d3dx.c (d3dx9_28) and bink_shaders.h
+  stay. DXVK 3.1.1 is now built here by the toolkit's tools/d3d9/build_dxvk.sh with no patches
+  (make dxvk; source third_party/dxvk, a clean copy of larush-native's v3.1.1 tree, nothing
+  downloaded); the earlier library came from LA Rush's build. SHOLD_SHOT / SHOLD_LOG_LOCKS keep
+  their names (port_getenv under PORT_ENV SHOLD).
+  - New with the bridge: 16x anisotropic filtering by default (option anisotropic), option vsync
+    (the game asks for interval DEFAULT, which passes through: real play stays vsynced), ETM's
+    death watchers and device lock, a fixed mode list under --test. A hidden window (--hidden)
+    now presents without waiting, so its frames run at 300-400 in the menus where a compositor
+    held them to 20 before [verified: after0216 first try, 2.4 ms frames, "d3d9.presentInterval =
+    0"]; work/baseline.sh therefore sets SHOLD_PACE=20 so its frame-numbered inputs land where
+    they did.
+  - Translation against v0.2.2's: 73,693 functions (10 new), 23 changed, all from v0.2.13's
+    reading of Visual C++ 2005's exception tables: 15 functions gained exception frames and 10 catch
+    blocks became functions of their own (e.g. 0x4f1367 out of 0x4f1357) [verified:
+    work/genfuncs_norm.py, the new functions' eh_ frames]. None of msvcp80/msvcr80's data exports
+    was a function here, so nothing dropped.
+  - Fixed on the way: game.c's merged-controller read left its buttons and axes unset when no
+    controller was connected (my move onto the toolkit, 2026-11-12; the old code cleared them),
+    so unplugging the last one could leave stray input [verified: gcc's maybe-uninitialized
+    warning on a[5]; now cleared].
+  - Checks, new reference work/baseline/ref [verified: against after022b, paced]: every check line
+    the same; rumble 27 events both; sound alike; the menu shots differ by about 1/255 on average
+    (the anisotropic filtering), the level shots show the same scenes at real-time-shifted moments.
+    First frame 4.9 s (3.5 s before; the level run's first try took 17 s under load 14).
+- Next pin move (after v0.2.16): v0.2.31 / v0.2.32 change thread and handle behaviour this game
+  meets: DuplicateHandle (imported here) makes real new handles; a thread made after another
+  ended reuses that one's stack, TEB and TLS; abandoned mutexes, TlsFree, FindFirstFile
+  wildcards; D3D9 LockRect/LockBox refuse rectangles outside the level. UE3 runs many threads, so
+  run work/baseline.sh (paced) against work/baseline/ref and tell the AntiStatic chat about any
+  difference that isn't explained by those.
+  v0.2.36 fixes the --hash draw column (every device call hashed as method 0); this port's checks
+  don't use --hash (no deterministic mode for UE3 here), so nothing to rerecord for it.
+- 2026-11-18: ANTISTATIC v0.2.38, THE TOOLKIT'S FIRST PUBLIC RELEASE. The submodule now points at the
+  public repository (github.com/AntAir267/AntiStatic-Recomp-Toolkit) at v0.2.38, and the toolkit
+  work above (done on a local branch while the toolkit was private) was published as one commit on
+  master, so no published commit names the private repository. README: the toolkit as a submodule,
+  DXVK's source and make dxvk; .recomp.json toolchain "AntiStatic".
+  - Translation against v0.2.16's [verified: v0.2.16's translator run again (identical to its first
+    run) and function-by-function compare]: the same 73,693 functions; 6 differ, each only by
+    fpu_locals_push_check after fptan (0x48e910, 0x49e430, 0x5d7c20, 0x7c9d10, 0x95aa90 and
+    msvcr80's 0x78189698): fptan of a huge argument pushes nothing, which a function keeping the
+    x87 stack in locals can't follow, so it now stops with a message instead of reading the wrong
+    slot (toolkit CHANGELOG). The thread/handle changes of v0.2.31-32 changed no translated code.
+  - Checks [verified: work/baseline/after0238 against ref, paced, the laptop at load ~8]: every check
+    line the same; rumble 29 events (27); sound alike; menu shots within 0-1.8/255 on average,
+    level shots the same scenes at real-time-shifted moments; first frame 5.1 s.

@@ -172,10 +172,4 @@ API(WSOCK32, 11, 1)
 /* #151 __WSAFDIsSet */
 API(WSOCK32, 151, 2) { return w_WS2_32_151_body(c); }
 
-/* ------------------------------------------------------------------ IPHLPAPI */
-/* no network adapters */
-API(IPHLPAPI, GetAdaptersInfo, 2)
-{
-    LOG(LOG_API, "GetAdaptersInfo: no adapters");
-    return 232;                          /* ERROR_NO_DATA */
-}
+/* (IPHLPAPI GetAdaptersInfo: the toolkit's, winmore.c: no adapters) */
