@@ -551,3 +551,32 @@ export entry changed (as tools/upkpatch.py does).
   - Checks [verified: work/baseline/after0238 against ref, paced, the laptop at load ~8]: every check
     line the same; rumble 29 events (27); sound alike; menu shots within 0-1.8/255 on average,
     level shots the same scenes at real-time-shifted moments; first frame 5.1 s.
+- 2026-11-18: ANISOTROPIC FILTERING IN VIDEO OPTIONS (Ant: "put anisotropic filtering in the game's
+  video options"). A row under Decals, "Anisotropic Filtering" ON (16x) / OFF, changed while the
+  game runs and kept in options.txt (option anisotropic).
+  - Menu (tools/screenset.py video-aniso, installed by make pad-data): clone_row copies the Decals
+    row (OBJ 0x34f8, 41 nodes) to the end of m_pcVideoOptions: nodes, transforms, child lists, its
+    handlers with node arguments inside the row pointed at the copies, its LIST widget block, and
+    the six animations its handlers play (table entries 14-19 copied as 24-27..: their target lists
+    point at the copies, keyframes shared, as the game's own rows share them [verified: entries 8
+    and 14 share 0x9f38]). The copy keeps Decals' ON / OFF list #9003, takes value var 9998 and the
+    label key Anisotropic_Filtering, sits one row lower (y 158), and Decals' Down / its Up link
+    the two [verified: rows listing, round trip].
+  - Runtime: hooks var_get / var_set on the screen engine's variable store (0x9b6990 a, id, x ret
+    0xc; 0x9b6a40 a, id, value, x ret 0x10) [verified: disassembly; the store is under GetVar
+    0x6a5250 and SetVar 0x6a52a0]: var 9998 reads option anisotropic and writes it (option_set,
+    options_save, options_changed). The list gives 1 for ON, 0 for OFF [verified: aniso1, Decals
+    from ON: 0 then 1]. Localize answers the missing key with an empty string and no buffer
+    [verified: aniso1 "room for 0"], so the hook gets one from the engine's allocator (GMalloc
+    [0x1069410] vtable +0x10, pointer/size/alignment, as Localize does; +0x14 frees) and writes
+    "Anisotropic Filtering".
+  - Live: AntiStatic v0.2.39's options_changed calls the bridge's d3d9_options, which calls DXVK's
+    DXVK_D3D9SetSamplerAnisotropy; DXVK is now built with the toolkit's "soft-shadows live-options"
+    patches (Makefile DXVK_PATCHES; build_dxvk.sh wants a clean source to change the set)
+    [verified: aniso2 log "options: anisotropic -1, shadow filter 0" after the toggle].
+  - Check [verified: work/aniso_check.sh, aniso2 shots]: the row shown in the game's style under
+    Decals, reached with the pad, ON then OFF after Right; options.txt "anisotropic = off".
+  - Regression [verified: work/baseline/after0239 against ref, AntiStatic v0.2.39, DXVK with
+    soft-shadows + live-options]: every check line the same, rumble 27 events, sound alike, menu
+    shots within 0-1.6/255, level shots the same scenes. Installed 2026-11-18 (make install, which
+    also put the row into the user folder's menus).

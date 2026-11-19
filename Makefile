@@ -81,9 +81,11 @@ build/obj/tk_d3d9.o build/obj/tk_d3d9_msaa.o: build/obj/tk_%.o: $(TK)/runtime/d3
 build/obj/rt_d3d9_gen.o: gen/d3d9_gen.c $(TK)/runtime/d3d9/d3d9_bridge.h $(TK_H) gen/d3d9_gen.h | build/obj
 	$(CC) $(CFLAGS_RT) -I$(TK)/runtime/d3d9 $(DXVK_INC) -Wno-unused-function -c $< -o $@
 
-# DXVK 3.1.1 built natively with SDL3 by the toolkit's script, no patches (third_party/README.md)
+# DXVK 3.1.1 built natively with SDL3 by the toolkit's script (third_party/README.md); live-options lets
+# Video Options change anisotropic filtering while the game runs (it needs soft-shadows)
+DXVK_PATCHES ?= soft-shadows live-options
 dxvk: $(SDL3)/lib/libSDL3.so.0
-	$(TK)/tools/d3d9/build_dxvk.sh --src third_party/dxvk --sdl3 $(SDL3) --prefix $(DXVK) --jobs $(JOBS)
+	$(TK)/tools/d3d9/build_dxvk.sh --src third_party/dxvk --sdl3 $(SDL3) --prefix $(DXVK) --patches "$(DXVK_PATCHES)" --jobs $(JOBS)
 
 build/stranglehold: $(RT_OBJ) $(TK_OBJ) $(GEN_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)

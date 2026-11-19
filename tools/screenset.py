@@ -766,7 +766,140 @@ def patch_main_exit_y(ss):
     print('main-exit-y: Exit Game footer @%#x -> Y image, x %g' % (exit_obj['off'], store_obj['xform'][6]))
 
 
+ANIM_OPS = {1016, 1017, 1019, 1020, 1021, 1022, 1024, 1033, 1056, 1064, 1074}  # first argument: animation index
+NODE_ARG_TYPES = (5, 6, 10, 11)                                            # arguments that point at a node
+ANISO_VAR = 9998   # [guess until run] a free screen var id; the runtime answers it (game.c, hooks var_get/var_set)
+
+
+def _subtree_offs(sc, off):
+    n = sc.node(off)
+    return [m['off'] for m in _subtree(n)]
+
+
+def clone_row(sc, src_off):
+    """Copy an option row (an OBJ and everything under it) to the end of the screen: its nodes,
+    transforms, child lists, handlers (node arguments inside the row point at the copies, the
+    rest as they were), its widget block, and the animations its handlers play (new entries in
+    the screen's animation table whose targets are the copies; keyframes shared). Returns
+    (new offset, node map)."""
+    olds = _subtree_offs(sc, src_off)
+    size = {'OBJ ': 0x20, 'GROP': 0x20, 'POLY': 0x74, 'TEXT': 0x34}
+    nmap = {}
+    for o in olds:                                   # nodes first: every new offset known
+        nmap[o] = sc.append(bytes(sc.b[o:o + size[sc.tag(o)]]))
+    anim_used = []
+    for o in olds:
+        if sc.tag(o) not in ('OBJ ', 'GROP'):
+            continue
+        hl = sc.u32(o + 0x10)
+        for k in range(sc.u32(hl) if hl else 0):
+            h = sc.u32(hl + 4 + 4 * k)
+            for i in range(sc.u32(h + 4)):
+                q = h + 0xc + 16 * i
+                a = sc.args(sc.u32(q + 0xc))
+                if sc.u32(q + 4) in ANIM_OPS and a and a[0]['type'] in (0, 1) and a[0]['value'] not in anim_used:
+                    anim_used.append(a[0]['value'])
+    at = sc.u32(0x10)
+    nanim = sc.u32(at)
+    amap = {old: nanim + j for j, old in enumerate(sorted(anim_used))}
+    def copy_args(p):
+        if not p:
+            return 0
+        out = []
+        for a in sc.args(p):
+            v = a['value']
+            if a['type'] in NODE_ARG_TYPES and v in nmap:
+                v = nmap[v]
+            out.append((a['type'], v))
+        return sc.new_args(out)
+    for o in olds:
+        n = nmap[o]
+        if sc.tag(o) not in ('OBJ ', 'GROP'):
+            continue
+        hl, tr, cl, xb = (sc.u32(o + k) for k in (0x10, 0x14, 0x18, 0x1c))
+        if tr:
+            sc.put32(n + 0x14, sc.append(bytes(sc.b[tr:tr + 80])))
+        if cl:
+            kids = [nmap[sc.u32(cl + 4 + 4 * k)] for k in range(sc.u32(cl))]
+            sc.put32(n + 0x18, sc.append(struct.pack(sc.e + 'I', len(kids)) +
+                                         b''.join(struct.pack(sc.e + 'I', k) for k in kids)))
+        if xb:
+            sc.put32(n + 0x1c, sc.append(struct.pack(sc.e + 'I', sc.u32(xb)) + struct.pack(sc.e + 'I', copy_args(sc.u32(xb + 4)))))
+        if hl:
+            hs = []
+            for k in range(sc.u32(hl)):
+                h = sc.u32(hl + 4 + 4 * k)
+                cnt = sc.u32(h + 4)
+                ents = []
+                for i in range(cnt):
+                    q = h + 0xc + 16 * i
+                    ap = copy_args(sc.u32(q + 0xc))
+                    if sc.u32(q + 4) in ANIM_OPS and ap:
+                        first = sc.u32(ap + 4)               # its first argument item
+                        if sc.u32(first) in (0, 1) and sc.i32(first + 4) in amap:
+                            sc.put32(first + 4, amap[sc.i32(first + 4)])
+                    ents.append(bytes(sc.b[q:q + 0xc]) + struct.pack(sc.e + 'I', ap))
+                hs.append(sc.append(bytes(sc.b[h:h + 0xc]) + b''.join(ents)))
+            sc.put32(n + 0x10, sc.append(struct.pack(sc.e + 'I', len(hs)) + b''.join(struct.pack(sc.e + 'I', x) for x in hs)))
+    if amap:                                          # the animation table, moved to the end with the copies
+        ents = [bytes(sc.b[at + 4 + 0x18 * i:at + 4 + 0x18 * (i + 1)]) for i in range(nanim)]
+        for old in sorted(amap):
+            e = bytearray(ents[old])
+            t = sc.u32(at + 4 + 0x18 * old + 0x10)
+            if t:
+                tl = [nmap.get(sc.u32(t + 4 + 4 * k), sc.u32(t + 4 + 4 * k)) for k in range(sc.u32(t))]
+                struct.pack_into(sc.e + 'I', e, 0x10, sc.append(struct.pack(sc.e + 'I', len(tl)) +
+                                                                b''.join(struct.pack(sc.e + 'I', x) for x in tl)))
+            ents.append(bytes(e))
+        sc.put32(0x10, sc.append(struct.pack(sc.e + 'I', len(ents)) + b''.join(ents)))
+    return nmap[src_off], nmap
+
+
+def _set_focus_target(sc, obj_off, event, target):
+    for h in sc.node(obj_off).get('handlers', []):
+        if h['event'] != event:
+            continue
+        for e in h['entries']:
+            if e['op'] in (1000, 1014, 1071) and len(e['args']) > 1:
+                sc.put32(e['args'][1]['off'] + 4, target)
+
+
+def patch_video_aniso(ss):
+    """m_pcVideoOptions: an Anisotropic Filtering row under Decals (Ant: "put anisotropic filtering
+    in the game's video options"), a copy of the Decals row with the same ON / OFF list (#9003),
+    its value in screen var ANISO_VAR (answered and set by the runtime: option anisotropic, ON
+    16x, OFF off) and the label key Anisotropic_Filtering (the runtime's Localize hook gives the
+    text). Decals' Down goes to it; its Up to Decals, its Down to itself."""
+    sc = ss.screen('m_pcVideoOptions')
+    dec = next(n for n in sc.walk_nodes() if n['tag'] == 'OBJ' and 'x' in n and
+               any(a['type'] == 9 and a['value'] == 9251 for a in n['x']['args']))
+    parent = next(n for n in sc.walk_nodes() if dec['off'] in [c['off'] for c in n.get('children', [])])
+    new, nmap = clone_row(sc, dec['off'])
+    xa = sc.u32(new + 0x1c)
+    for a in sc.args(sc.u32(xa + 4)):                 # the value var
+        if a['type'] == 9 and a['value'] == 9251:
+            sc.put32(a['off'] + 4, ANISO_VAR)
+    key = sc.add_strings([b'Anisotropic_Filtering'])[0]
+    for o in nmap.values():
+        if sc.tag(o) == 'TEXT' and sc.string(sc.u32(o + 0x10)) == b'Decals':
+            sc.put32(o + 0x10, key)
+    tr = sc.u32(new + 0x14)                           # one row lower (rows are ~29.5 apart)
+    sib = [c for c in parent['children'] if c['tag'] == 'OBJ' and 'xform' in c and 'x' in c]
+    ys = sorted(c['xform'][7] for c in sib)
+    step = ys[-1] - ys[-2] if len(ys) > 1 else 29.5
+    struct.pack_into(sc.e + 'f', sc.b, tr + 4 * 7, dec['xform'][7] + step)
+    _set_focus_target(sc, dec['off'], 1007, new)      # Decals: Down
+    _set_focus_target(sc, new, 1006, dec['off'])      # the new row: Up (Down: itself, copied)
+    cl = sc.u32(parent['off'] + 0x18)
+    kids = [sc.u32(cl + 4 + 4 * k) for k in range(sc.u32(cl))]
+    i = kids.index(dec['off']) + 1
+    kids[i:i] = [new]
+    sc.put32(parent['off'] + 0x18, sc.append(struct.pack(sc.e + 'I', len(kids)) + b''.join(struct.pack(sc.e + 'I', k) for k in kids)))
+    print('video-aniso: row @%#x (from Decals @%#x), y %g, %d nodes' % (new, dec['off'], dec['xform'][7] + step, len(nmap)))
+
+
 PATCHES = {
+    'video-aniso': patch_video_aniso,
     'main-exit-y': patch_main_exit_y,
     'controlconfig-always': lambda ss: patch_settings_route(ss, 'always'),
     'controlconfig-pad': lambda ss: patch_settings_route(ss, 'pad'),

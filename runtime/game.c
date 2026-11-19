@@ -266,9 +266,38 @@ static void fstr_replace(uint32_t fs, uint32_t from, uint32_t to)
 
 static int hook_localize_fn(CPU *c)
 {
+    uint32_t out = R32(c->esp + 4), key = R32(c->esp + 12);
+    if (wstr_eq(key, "Anisotropic_Filtering")) {
+        /* the Video Options row this port adds (the game has no text for it): written into the
+           string the original made for the missing key ("?INT?...?", longer) */
+        static const char text[] = "Anisotropic Filtering";
+        F_006f85c0_orig(c);                 /* (returns to our caller's state: ret popped) */
+        uint32_t d = R32(out), max = R32(out + 8);
+        if (!d || max < sizeof text) {
+            /* (a missing key comes back empty, no buffer [verified: aniso1, room for 0]): a new one
+               from the engine's allocator, which frees the string later, GMalloc [0x1069410]
+               ->vtable[+0x10] (pointer, size, alignment) as Localize itself calls it
+               [verified: disassembly 0x6f8700-0x6f8760] */
+            uint32_t gmalloc = R32(0x1069410u);
+            if (!gmalloc)
+                return 1;
+            uint32_t saved_ecx = c->ecx;
+            c->ecx = gmalloc;
+            uint32_t p = guest_call(c, R32(R32(gmalloc) + 0x10), 3, d, (uint32_t)(2 * sizeof text), 8u);
+            c->ecx = saved_ecx;
+            if (!p)
+                return 1;
+            W32(out, p);
+            W32(out + 8, sizeof text);
+            d = p;
+        }
+        for (uint32_t i = 0; i < sizeof text; i++)
+            W16(d + 2 * i, (uint8_t)text[i]);
+        W32(out + 4, sizeof text);
+        return 1;
+    }
     if (!disp_xbox || !input_controller_last())
         return 0;
-    uint32_t out = R32(c->esp + 4), key = R32(c->esp + 12);
     if (!wstr_eq(key, "Press_Start") && !wstr_eq(key, "Press_Start_Button") &&
         !wstr_eq(key, "Press_A_button_To_Begin_Match") && !wstr_eq(key, "tips_PressAContinue"))
         return 0;
@@ -351,6 +380,61 @@ static void images_tick(void)
     LOG(LOG_INPUT, "menus: Xbox button images %s", want ? "shown" : "hidden (PC)");
 }
 
+/* ------------------------------------------------------------------ anisotropic filtering row
+   Video Options' Anisotropic Filtering row (tools/screenset.py video-aniso) is a copy of Decals' ON /
+   OFF list (#9003) with its value in screen var 9998, which the game doesn't declare: the store's
+   get and set (hooks var_get / var_set) answer it from option anisotropic and change that option
+   (ON = 16x, OFF = off). Which list value is ON is ANISO_ON [guess until run: Decals' var 9251
+   reads it while Decals is ON; SHOLD_ANISO_ON overrides for the check]. The label key
+   Anisotropic_Filtering gets its text from the Localize hook. */
+#define ANISO_VAR 9998u
+static int aniso_on_value(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = port_getenv("ANISO_ON");
+        v = e ? atoi(e) : 1;
+    }
+    return v;
+}
+
+static int aniso_is_on(void)
+{
+    return strcasecmp(option_str("anisotropic", "16"), "off") != 0;
+}
+
+static int hook_var_get_fn(CPU *c)
+{
+    uint32_t id = R32(c->esp + 8);
+    if (id != ANISO_VAR)
+        return 0;
+    c->eax = aniso_is_on() ? (uint32_t)aniso_on_value() : (uint32_t)!aniso_on_value();
+    c->ret = R32(c->esp);
+    c->esp += 16;                           /* (ret 0xc) */
+    return 1;
+}
+
+static int hook_var_set_fn(CPU *c)
+{
+    uint32_t id = R32(c->esp + 8), value = R32(c->esp + 12);
+    if (id == 9251u) {                      /* (Decals: the value its ON / OFF list gives, for the check) */
+        LOG(LOG_ALWAYS, "menus: Decals var 9251 set to %u", value);
+        return 0;
+    }
+    if (id != ANISO_VAR)
+        return 0;
+    int on = (int)value == aniso_on_value();
+    if (on != aniso_is_on()) {
+        option_set("anisotropic", on ? "16" : "off");
+        options_save();
+        options_changed();
+        LOG(LOG_ALWAYS, "menus: Anisotropic Filtering %s (option anisotropic = %s)", on ? "ON" : "OFF", on ? "16" : "off");
+    }
+    c->ret = R32(c->esp);
+    c->esp += 20;                           /* (ret 0x10) */
+    return 1;
+}
+
 static int hook_button_name_fn(CPU *c);
 
 /* SKIP INTRO (options.txt skip_intro = on; for tests): the start-up logo and legal movies and the
@@ -392,6 +476,8 @@ void game_init(void)
         pad_options();
     }
     hook_screen_var = hook_screen_var_fn;
+    hook_var_get = hook_var_get_fn;
+    hook_var_set = hook_var_set_fn;
     hook_widescreen_flag = hook_widescreen_flag_fn;
     hook_localize = hook_localize_fn;
     hook_load_profile_config = hook_load_profile_config_fn;

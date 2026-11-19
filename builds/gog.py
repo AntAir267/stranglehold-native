@@ -86,4 +86,11 @@ HOOKS = {
     # variable store 0x9b6990]: id 9999 (undeclared in the game) answers "a pad is in use" for the
     # patched Settings menus (tools/screenset.py controlconfig-pad) (game.c)
     0x6a5250: 'screen_var',
+    # the screen engine's variable store: get (thiscall: a, id, x; ret 0xc) and set (a, id, value,
+    # x; ret 0x10), under every screen-var read and write (GetVar 0x6a5250, SetVar 0x6a52a0, the
+    # widgets) [verified: disassembly of both and their callers 0x6a528a / 0x6a52d9]: var 9998, the
+    # Video Options Anisotropic Filtering row (tools/screenset.py video-aniso), is option
+    # anisotropic (game.c)
+    0x9b6990: 'var_get',
+    0x9b6a40: 'var_set',
 }
