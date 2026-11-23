@@ -580,3 +580,9 @@ export entry changed (as tools/upkpatch.py does).
     soft-shadows + live-options]: every check line the same, rumble 27 events, sound alike, menu
     shots within 0-1.6/255, level shots the same scenes. Installed 2026-11-18 (make install, which
     also put the row into the user folder's menus).
+- Next pin move, v0.2.46 or later: x87 sin/cos/tan/atan/log/2^x and SSE rcp/rsqrt computed
+  portably by default (PORT_X87_PORTABLE / PORT_SSE_PORTABLE, about 0.2 ms a frame on L.A. Rush) so
+  --test runs match on every PC; --test D3D9 sees a fixed card (test_card). This port's checks are
+  real-time runs (no --test for UE3 here), so those gains are small for it: decide then whether to
+  keep the defaults. Build: make gen objects depend on port.h and runtime/cpu/*.h (cpu.h reads
+  port.h), regenerate gen/d3d9_gen.c, run work/baseline.sh and rerecord ref.
