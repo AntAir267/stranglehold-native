@@ -586,3 +586,24 @@ export entry changed (as tools/upkpatch.py does).
   real-time runs (no --test for UE3 here), so those gains are small for it: decide then whether to
   keep the defaults. Build: make gen objects depend on port.h and runtime/cpu/*.h (cpu.h reads
   port.h), regenerate gen/d3d9_gen.c, run work/baseline.sh and rerecord ref.
+- 2026-11-23: ANTISTATIC v0.2.47 (Ant, via Recomp Advisor: from v0.2.39 through v0.2.46): caught
+  C++ exceptions and SEH4 __except blocks carry on in VC 2005/2008 programs (this one is msvcr80 /
+  msvcp80); portable x87 / SSE maths on by default (PORT_X87_PORTABLE, PORT_SSE_PORTABLE kept);
+  a fixed test card under --test. Makefile: generated objects depend on port.h and
+  runtime/cpu/*.h (cpu.h reads port.h). DXVK unchanged (soft-shadows live-options).
+  - Translation against v0.2.39's [verified: v0.2.39 retranslated, identical to before;
+    work/genfuncs_norm.py]: 73,698 functions (5 new, none gone); 2,768 changed: 2,669 only by
+    icall -> ijump (an indirect tail jump), 90 gained an exception frame (eh_push: a catch or
+    __except they now resume in; 57 in DFEngine.dll, 31 in msvcr80, 5 msvcp80, the rest the
+    program), 9 lost their __except block, now a function of its own (the 5 new ones, e.g.
+    0x9c3c9c out of 0x9c3c73), or turned an indirect jump into a nonlocal_jump (0x78158c20)
+    [verified: diffs of examples of each]. tests/fncheck.c calls the toolkit's icall and has no
+    icall of its own, so it needs no ijump.
+  - Checks [verified: work/baseline/after0247 against ref]: every check line the same; rumble 28
+    events; sound alike; menu shots 0-2.5/255 apart, level shots the same scenes; first frame
+    3.5 s. No C++ exception is thrown in these runs. Recorded as the new work/baseline/ref.
+  - Open: a forced throw on the real game (HOOKS test_throw + SHOLD_TEST_THROW) inside a function
+    with a catch that runs in the menus; needs a rebuild with the hook, now on the build PC.
+- 2026-11-23: the game folder (13 GB) is on two other PCs (Ant's OK): builds and routine checks
+  go there, this laptop only for final checks. The Xbox 360 copy (6.7 GB, reading/compare only)
+  was moved to the Trash at Ant's request.

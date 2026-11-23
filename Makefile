@@ -56,7 +56,7 @@ gen/funcs.h gen/table.c gen/stubs.c gen/x87_special.c: gen/.stamp ;
 gen/files.mk: gen/.stamp
 	@echo 'GEN_CODE = $(sort $(wildcard gen/code_*.c))' > $@
 
-build/obj/gen_%.o: gen/%.c gen/funcs.h $(TK)/runtime/cpu/cpu.h | build/obj
+build/obj/gen_%.o: gen/%.c gen/funcs.h runtime/port.h $(wildcard $(TK)/runtime/cpu/*.h) | build/obj
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
 
 build/obj/tk_%.o: $(TK)/runtime/win32/%.c runtime/port.h $(TK_H) gen/funcs.h | build/obj
