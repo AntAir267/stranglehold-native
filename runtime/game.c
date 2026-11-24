@@ -435,6 +435,18 @@ static int hook_var_set_fn(CPU *c)
     return 1;
 }
 
+/* (tests) SHOLD_TEST_THROW=1 [SHOLD_TEST_THROW_TYPE=wstr]: 0x7180a0's call from inside 0x718e90's
+   try (return address 0x718efd) throws once, through the toolkit's eh_test_throw, so the catch
+   0x718fd0 (catch const TCHAR*: Unreal's appThrowf text) is checked to go on */
+static int hook_try_throw_fn(CPU *c)
+{
+    static int done;
+    if (done || R32(c->esp) != 0x718efdu || !port_getenv("TEST_THROW"))
+        return 0;
+    done = 1;
+    return eh_test_throw(c);
+}
+
 static int hook_button_name_fn(CPU *c);
 
 /* SKIP INTRO (options.txt skip_intro = on; for tests): the start-up logo and legal movies and the
@@ -477,6 +489,7 @@ void game_init(void)
     }
     hook_screen_var = hook_screen_var_fn;
     hook_var_get = hook_var_get_fn;
+    hook_try_throw = hook_try_throw_fn;
     hook_var_set = hook_var_set_fn;
     hook_widescreen_flag = hook_widescreen_flag_fn;
     hook_localize = hook_localize_fn;

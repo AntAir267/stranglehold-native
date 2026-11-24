@@ -607,3 +607,30 @@ export entry changed (as tools/upkpatch.py does).
 - 2026-11-23: the game folder (13 GB) is on two other PCs (Ant's OK): builds and routine checks
   go there, this laptop only for final checks. The Xbox 360 copy (6.7 GB, reading/compare only)
   was moved to the Trash at Ant's request.
+- 2026-11-24: ANTISTATIC v0.2.50, the caught-exception check and the build PC.
+  - Exception test (SHOLD_TEST_THROW=1 SHOLD_TEST_THROW_TYPE=wstr; HOOKS try_throw on 0x7180a0 hands
+    to the toolkit's eh_test_throw only when called from 0x718efd, inside 0x718e90's C++ try, states
+    0..3, catch (const TCHAR*) at 0x718fd0 [verified: FuncInfo 0xf3f2ec]; work/throw_check.sh).
+    First run found a toolkit bug, now fixed in v0.2.50: UE3's error reporter takes its own address
+    with `call <next instruction>` (0x6fd3e3 -> 0x6fd3e8), which the translator had made a function
+    of its own, so it returned with its caller's return address ("call at 006fd3e3 returned to
+    006fe651"). On v0.2.50 [verified: throw2 log]: the throw is caught, the catch runs to its end:
+    it reports the text as an engine assertion ("Assertion failed: test throw [File:.\Core\Src\
+    UnObj.cpp] [Line: 4977]", the runtime answering the message box) and the game quits with code 1,
+    as this catch does on Windows. Every other catch that runs on these routes is also
+    catch (const TCHAR*) (0x713520, 0x7149c0, 0x7180a0, 0x7184f0); catch (...) only in 0x4e5d10,
+    0x4f09a0, 0x70abc0, which these routes don't reach.
+  - Translation against v0.2.47's [verified: function compare]: 0x6fd3e8 gone (that false
+    function), 0x6fd390 changed (call-to-next as push and fall through), 0x7180a0 changed (the
+    test hook).
+  - The build PC (NVIDIA, Linux, no display): builds there (Capstone 5.0.7 there translates function for function the same as 5.0.9
+    here [verified: fingerprints]); headless runs use SDL_VIDEODRIVER=offscreen, where the toolkit
+    now answers a 1920x1080 desktop and the fixed D3D9 modes (before v0.2.50 the game made a 0x0
+    window and never created a device). work/baseline.sh offscreen on the build PC against ref
+    [verified]: every check line the same except one fewer "Xbox button names in use" (the build
+    PC has no gamepad; the laptop's built-in one counts in its keyboard run), rumble 27, sound
+    alike, shots the same screens. Third-party libraries there: third_party/sdl3 and dxvk-native
+    copied from here; Python: etm-native's venv (Capstone 5.0.7).
+  - Check tiers: per change, the touched route of work/baseline.sh on the farm (offscreen, the build
+    PC or another); before an install or toolkit move, all of work/baseline.sh plus the translation
+    compare; the exception route after a toolkit move.

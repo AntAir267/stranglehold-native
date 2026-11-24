@@ -91,6 +91,11 @@ HOOKS = {
     # widgets) [verified: disassembly of both and their callers 0x6a528a / 0x6a52d9]: var 9998, the
     # Video Options Anisotropic Filtering row (tools/screenset.py video-aniso), is option
     # anisotropic (game.c)
+    # (tests) a callee inside 0x718e90's C++ try (states 0..3, catch (const TCHAR*) at 0x718fd0 logs
+    # and returns 0) [verified: its FuncInfo 0xf3f2ec, magic 0x19930522; the call at 0x718ef8 is in
+    # state 0]: with SHOLD_TEST_THROW the call from there throws, to check a real UE3 catch goes on
+    # (game.c try_throw)
+    0x7180a0: 'try_throw',
     0x9b6990: 'var_get',
     0x9b6a40: 'var_set',
 }
