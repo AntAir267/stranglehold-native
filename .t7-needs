@@ -1,0 +1,7 @@
+# What a farm PC needs for this project (~/DevWork/Games/tools/README.md)
+# the game folder (the translation reads the program and DLLs; tests read its packages)
+path ~/.local/share/stranglehold-native/game
+# SDL3 and DXVK (soft-shadows + live-options) built into third_party, as third_party/README.md says
+path ~/DevWork/stranglehold-native/third_party/sdl3/lib/libSDL3.so.0
+path ~/DevWork/stranglehold-native/third_party/dxvk-native/lib/x86_64-linux-gnu/libdxvk_d3d9.so.0
+cmd python3
